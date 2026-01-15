@@ -1,0 +1,787 @@
+/*
+ * ESP8266 Firmware for STM32 Communication
+ *
+ * This sketch runs on ESP8266 and provides NTP time, weather, and stock data
+ * to an STM32 microcontroller via UART (115200 baud).
+ *
+ * Uses the STM32Comm library for serial communication protocol handling.
+ */
+
+#include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h>
+#include <WiFiClient.h>
+#include <WiFiClientSecure.h>
+#include <WiFiUdp.h>
+#include <NTPClient.h>
+#include <ArduinoJson.h>
+#include <EEPROM.h>
+#include <ESP_Google_Sheet_Client.h>
+#include <STM32Comm.h>
+#include <ICalParser.h>
+
+// ============================================================================
+// CONFIGURATION
+// ============================================================================
+
+const char* DEFAULT_WIFI_SSID = "YourWiFiSSID";
+const char* DEFAULT_WIFI_PASSWORD = "YourWiFiPassword";
+
+// Weather API (OpenWeatherMap)
+const char* WEATHER_API_KEY = "your_api_key_here";
+const char* WEATHER_CITY = "San Francisco";
+const char* WEATHER_COUNTRY_CODE = "US";
+
+// Stock API (Alpha Vantage)
+const char* STOCK_API_KEY = "your_api_key_here";
+
+// NTP Configuration
+const long UTC_OFFSET_SEC = -8 * 3600;  // PST = UTC-8
+const int NTP_UPDATE_INTERVAL = 60000;
+
+// ============================================================================
+// CREDENTIALS STORAGE
+// ============================================================================
+
+#define EEPROM_SIZE 4096
+#define EEPROM_MAGIC 0xAA55
+#define MAX_SSID_LEN 32
+#define MAX_PASS_LEN 64
+#define MAX_PROJECT_ID_LEN 128
+#define MAX_EMAIL_LEN 256
+#define MAX_PRIVATE_KEY_LEN 2048
+#define MAX_CALENDAR_URL_LEN 256
+
+struct WiFiCredentials {
+  uint16_t magic;
+  char ssid[MAX_SSID_LEN + 1];
+  char password[MAX_PASS_LEN + 1];
+  uint8_t checksum;
+};
+
+struct GCPCredentials {
+  char project_id[MAX_PROJECT_ID_LEN + 1];
+  char client_email[MAX_EMAIL_LEN + 1];
+  char private_key[MAX_PRIVATE_KEY_LEN + 1];
+};
+
+WiFiCredentials wifiCreds;
+GCPCredentials gcpCreds;
+char calendarUrl[MAX_CALENDAR_URL_LEN + 1];
+
+// ============================================================================
+// GLOBALS
+// ============================================================================
+
+STM32Comm comm;
+FirebaseJson gSheetResponse;
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "pool.ntp.org", UTC_OFFSET_SEC, NTP_UPDATE_INTERVAL);
+
+// State flags
+bool gsheetInitialized = false;
+bool taskComplete = false;
+bool gsheetInitAttempted = false;
+
+// WiFi state machine
+enum AppWiFiState { WIFI_IDLE, WIFI_CONNECTING, WIFI_CONNECTED };
+AppWiFiState wifiState = WIFI_IDLE;
+unsigned long wifiConnectStartTime = 0;
+const unsigned long WIFI_CONNECT_TIMEOUT = 10000;
+const unsigned long WIFI_CHECK_INTERVAL = 100;
+unsigned long lastWifiCheck = 0;
+
+// Cache for API responses
+struct {
+  unsigned long lastWeatherUpdate = 0;
+  String weatherData = "";
+  unsigned long lastStockUpdate = 0;
+  String stockSymbol = "";
+  String stockData = "";
+} cache;
+
+const unsigned long WEATHER_CACHE_TIME = 900000;  // 15 minutes
+const unsigned long STOCK_CACHE_TIME = 60000;     // 1 minute
+
+// ============================================================================
+// WIFI CREDENTIALS (EEPROM)
+// ============================================================================
+
+uint8_t calculateChecksum(const WiFiCredentials& creds) {
+  uint8_t sum = 0;
+  const uint8_t* data = (const uint8_t*)&creds;
+  for (size_t i = 0; i < sizeof(WiFiCredentials) - 1; i++) {
+    sum += data[i];
+  }
+  return sum;
+}
+
+bool loadWiFiCredentials() {
+  EEPROM.get(0, wifiCreds);
+  if (wifiCreds.magic != EEPROM_MAGIC) return false;
+  if (calculateChecksum(wifiCreds) != wifiCreds.checksum) return false;
+  return true;
+}
+
+void saveWiFiCredentials(const char* ssid, const char* password) {
+  wifiCreds.magic = EEPROM_MAGIC;
+  strncpy(wifiCreds.ssid, ssid, MAX_SSID_LEN);
+  wifiCreds.ssid[MAX_SSID_LEN] = '\0';
+  strncpy(wifiCreds.password, password, MAX_PASS_LEN);
+  wifiCreds.password[MAX_PASS_LEN] = '\0';
+  wifiCreds.checksum = calculateChecksum(wifiCreds);
+  EEPROM.put(0, wifiCreds);
+  EEPROM.commit();
+}
+
+// ============================================================================
+// GCP CREDENTIALS (RAM only)
+// ============================================================================
+
+void tryInitGSheet() {
+  if (gsheetInitialized) return;
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  if (!gsheetInitAttempted) {
+    gsheetInitAttempted = true;
+    comm.debug("WiFi connected, checking GCP credentials...");
+    comm.debugf("project_id len: %d", strlen(gcpCreds.project_id));
+    comm.debugf("client_email len: %d", strlen(gcpCreds.client_email));
+    comm.debugf("private_key len: %d", strlen(gcpCreds.private_key));
+  }
+
+  if (strlen(gcpCreds.project_id) == 0 ||
+      strlen(gcpCreds.client_email) == 0 ||
+      strlen(gcpCreds.private_key) == 0) {
+    return;
+  }
+
+  comm.debug("Initializing GSheet with credentials");
+  GSheet.begin(gcpCreds.client_email, gcpCreds.project_id, gcpCreds.private_key);
+  gsheetInitialized = true;
+  comm.debug("GSheet initialized, waiting for auth...");
+}
+
+
+// ============================================================================
+// WIFI CONNECTION (NON-BLOCKING)
+// ============================================================================
+
+void startWiFiConnect() {
+  if (wifiState == WIFI_CONNECTING) return;
+
+  comm.debugf("Starting WiFi connection to: %s", wifiCreds.ssid);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(wifiCreds.ssid, wifiCreds.password);
+
+  wifiState = WIFI_CONNECTING;
+  wifiConnectStartTime = millis();
+  lastWifiCheck = millis();
+}
+
+void handleAppWiFiState() {
+  unsigned long now = millis();
+
+  switch (wifiState) {
+    case WIFI_IDLE:
+      if (WiFi.status() != WL_CONNECTED) {
+        startWiFiConnect();
+      }
+      break;
+
+    case WIFI_CONNECTING:
+      if (now - lastWifiCheck >= WIFI_CHECK_INTERVAL) {
+        lastWifiCheck = now;
+        if (WiFi.status() == WL_CONNECTED) {
+          wifiState = WIFI_CONNECTED;
+          comm.debugf("WiFi connected, IP: %s", WiFi.localIP().toString().c_str());
+        } else if (now - wifiConnectStartTime >= WIFI_CONNECT_TIMEOUT) {
+          wifiState = WIFI_IDLE;
+          comm.debug("WiFi connection timeout");
+          comm.sendError("WIFI_CONNECT_FAILED");
+        }
+      }
+      break;
+
+    case WIFI_CONNECTED:
+      if (WiFi.status() != WL_CONNECTED) {
+        comm.debug("WiFi connection lost");
+        wifiState = WIFI_IDLE;
+      }
+      break;
+  }
+}
+
+// ============================================================================
+// GOOGLE SHEETS
+// ============================================================================
+
+int getBalance() {
+  gSheetResponse.clear();
+  if (GSheet.values.get(&gSheetResponse,
+                        "17LL2-dGZ4IDsxmZm_Vnl6F9BJ2zrWcfUP-DBS8n2ZLY",
+                        "Sheet1!F2:F2")) {
+    FirebaseJsonData jsonData;
+    if (gSheetResponse.get(jsonData, "values/[0]/[0]")) {
+      return jsonData.to<int>();
+    }
+  }
+  return -1;
+}
+
+// ============================================================================
+// COMMAND HANDLERS
+// ============================================================================
+
+void handleWifiCommand(const char* params) {
+  // Parse SSID,PASSWORD
+  char ssid[MAX_SSID_LEN + 1];
+  char password[MAX_PASS_LEN + 1];
+
+  int nextPos = stm32comm_parseParam(params, ssid, sizeof(ssid), 0);
+  if (nextPos < 0) {
+    comm.sendError("INVALID_WIFI_FORMAT");
+    return;
+  }
+  stm32comm_parseParam(params, password, sizeof(password), nextPos);
+
+  if (strlen(ssid) == 0 || strlen(ssid) > MAX_SSID_LEN || strlen(password) > MAX_PASS_LEN) {
+    comm.sendError("INVALID_WIFI_PARAMS");
+    return;
+  }
+
+  // Save and reconnect
+  saveWiFiCredentials(ssid, password);
+  strncpy(wifiCreds.ssid, ssid, MAX_SSID_LEN);
+  strncpy(wifiCreds.password, password, MAX_PASS_LEN);
+
+  WiFi.disconnect();
+  wifiState = WIFI_IDLE;
+  startWiFiConnect();
+
+  comm.sendOK();
+}
+
+void handleStatusCommand(const char* params) {
+  (void)params;
+
+  // Determine GSheet status
+  const char* gsheetStatus;
+  if (!gsheetInitialized) {
+    gsheetStatus = "GSHEET_NOT_INIT";
+  } else if (GSheet.ready()) {
+    gsheetStatus = "GSHEET_READY";
+  } else {
+    gsheetStatus = "GSHEET_AUTH_PENDING";
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    comm.sendf("STATUS:CONNECTED,%s,%d,%s", WiFi.localIP().toString().c_str(), WiFi.RSSI(), gsheetStatus);
+  } else if (wifiState == WIFI_CONNECTING) {
+    comm.sendf("STATUS:CONNECTING,%s", gsheetStatus);
+  } else {
+    comm.sendf("STATUS:DISCONNECTED,%s", gsheetStatus);
+  }
+}
+
+void handleTimeCommand(const char* params) {
+  (void)params;
+  if (!timeClient.isTimeSet()) {
+    timeClient.forceUpdate();
+  }
+
+  if (!timeClient.isTimeSet()) {
+    comm.sendError("NTP_FAILED");
+    return;
+  }
+
+  unsigned long epochTime = timeClient.getEpochTime();
+  time_t rawTime = epochTime;
+  struct tm* timeInfo = gmtime(&rawTime);
+
+  comm.sendf("TIME:%04d-%02d-%02dT%02d:%02d:%02dZ",
+             timeInfo->tm_year + 1900, timeInfo->tm_mon + 1, timeInfo->tm_mday,
+             timeInfo->tm_hour, timeInfo->tm_min, timeInfo->tm_sec);
+}
+
+void handleWeatherCommand(const char* params) {
+  (void)params;
+
+  // Check cache
+  unsigned long now = millis();
+  if (cache.weatherData.length() > 0 &&
+      (now - cache.lastWeatherUpdate) < WEATHER_CACHE_TIME) {
+    comm.send(cache.weatherData.c_str());
+    return;
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    comm.sendError("NO_WIFI");
+    return;
+  }
+
+  // Build API URL
+  String url = "http://api.openweathermap.org/data/2.5/weather?q=";
+  url += WEATHER_CITY;
+  url += ",";
+  url += WEATHER_COUNTRY_CODE;
+  url += "&appid=";
+  url += WEATHER_API_KEY;
+  url += "&units=metric";
+
+  WiFiClient client;
+  HTTPClient http;
+  http.begin(client, url);
+  int httpCode = http.GET();
+
+  if (httpCode != 200) {
+    http.end();
+    comm.sendf("ERROR:HTTP_%d", httpCode);
+    return;
+  }
+
+  String payload = http.getString();
+  http.end();
+
+  StaticJsonDocument<1024> doc;
+  if (deserializeJson(doc, payload)) {
+    comm.sendError("JSON_PARSE");
+    return;
+  }
+
+  float temp_c = doc["main"]["temp"];
+  int temp_f = (int)(temp_c * 9.0 / 5.0 + 32.0);
+  const char* condition = doc["weather"][0]["main"];
+  int humidity = doc["main"]["humidity"];
+
+  String response = "WEATHER:";
+  response += String(temp_f) + "," + String((int)temp_c) + "," + String(condition) + "," + String(humidity);
+
+  cache.weatherData = response;
+  cache.lastWeatherUpdate = now;
+
+  comm.send(response.c_str());
+}
+
+void handleStockCommand(const char* params) {
+  String symbol = String(params);
+  symbol.trim();
+  symbol.toUpperCase();
+
+  unsigned long now = millis();
+  if (symbol == cache.stockSymbol && cache.stockData.length() > 0 &&
+      (now - cache.lastStockUpdate) < STOCK_CACHE_TIME) {
+    comm.send(cache.stockData.c_str());
+    return;
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    comm.sendError("NO_WIFI");
+    return;
+  }
+
+  String url = "http://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=";
+  url += symbol;
+  url += "&apikey=";
+  url += STOCK_API_KEY;
+
+  WiFiClient client;
+  HTTPClient http;
+  http.begin(client, url);
+  int httpCode = http.GET();
+
+  if (httpCode != 200) {
+    http.end();
+    comm.sendf("ERROR:HTTP_%d", httpCode);
+    return;
+  }
+
+  String payload = http.getString();
+  http.end();
+
+  StaticJsonDocument<1024> doc;
+  if (deserializeJson(doc, payload)) {
+    comm.sendError("JSON_PARSE");
+    return;
+  }
+
+  const char* priceStr = doc["Global Quote"]["05. price"];
+  if (!priceStr) {
+    comm.sendError("INVALID_SYMBOL");
+    return;
+  }
+
+  float price = atof(priceStr);
+  String response = "STOCK:" + symbol + ":" + String(price, 2);
+
+  cache.stockSymbol = symbol;
+  cache.stockData = response;
+  cache.lastStockUpdate = now;
+
+  comm.send(response.c_str());
+}
+
+void handleBalanceCommand(const char* params) {
+  (void)params;
+
+  if (!gsheetInitialized) {
+    comm.sendError("GSHEET_NOT_INIT");
+    return;
+  }
+
+  if (!GSheet.ready()) {
+    comm.sendError("GSHEET_NOT_READY");
+    return;
+  }
+
+  int balance = getBalance();
+  if (balance >= 0) {
+    comm.sendf("BALANCE:%d", balance);
+  } else {
+    comm.sendError("BALANCE_QUERY_FAILED");
+  }
+}
+
+void handleGCPProjectCommand(const char* params) {
+  if (strlen(params) == 0 || strlen(params) > MAX_PROJECT_ID_LEN) {
+    comm.sendError("INVALID_PROJECT_ID");
+    return;
+  }
+  strncpy(gcpCreds.project_id, params, MAX_PROJECT_ID_LEN);
+  gcpCreds.project_id[MAX_PROJECT_ID_LEN] = '\0';
+  tryInitGSheet();
+  comm.sendOK();
+}
+
+void handleGCPEmailCommand(const char* params) {
+  if (strlen(params) == 0 || strlen(params) > MAX_EMAIL_LEN) {
+    comm.sendError("INVALID_EMAIL");
+    return;
+  }
+  strncpy(gcpCreds.client_email, params, MAX_EMAIL_LEN);
+  gcpCreds.client_email[MAX_EMAIL_LEN] = '\0';
+  tryInitGSheet();
+  comm.sendOK();
+}
+
+void handleGCPKeyCommand(const char* params) {
+  if (strlen(params) == 0 || strlen(params) > MAX_PRIVATE_KEY_LEN) {
+    comm.sendError("INVALID_KEY");
+    return;
+  }
+  // Convert \n literals to actual newlines for PEM format
+  stm32comm_unescapeNewlines(params, gcpCreds.private_key, MAX_PRIVATE_KEY_LEN + 1);
+  comm.debugf("Private key converted, new len: %d", strlen(gcpCreds.private_key));
+  tryInitGSheet();
+  comm.sendOK();
+}
+
+void handleSetCalendarUrlCommand(const char* params) {
+  if (strlen(params) == 0 || strlen(params) > MAX_CALENDAR_URL_LEN) {
+    comm.sendError("INVALID_CALENDAR_URL");
+    return;
+  }
+  strncpy(calendarUrl, params, MAX_CALENDAR_URL_LEN);
+  calendarUrl[MAX_CALENDAR_URL_LEN] = '\0';
+  comm.debugf("Calendar URL set, len: %d", strlen(calendarUrl));
+  comm.sendOK();
+}
+
+void handleCalendarCommand(const char* params) {
+  // Parse optional event count parameter (default 10)
+  int maxEvents = 10;
+  if (params && strlen(params) > 0) {
+    maxEvents = atoi(params);
+    if (maxEvents < 1) maxEvents = 1;
+    if (maxEvents > 20) maxEvents = 20;
+  }
+
+  if (strlen(calendarUrl) == 0) {
+    comm.sendError("CALENDAR_URL_NOT_SET");
+    return;
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    comm.sendError("NO_WIFI");
+    return;
+  }
+
+  comm.debug("Fetching calendar...");
+  comm.debugf("Free heap: %d", ESP.getFreeHeap());
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  client.setBufferSizes(4096, 512);
+
+  HTTPClient http;
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.setRedirectLimit(5);
+  http.setTimeout(15000);
+
+  if (!http.begin(client, calendarUrl)) {
+    comm.sendError("HTTP_BEGIN_FAILED");
+    return;
+  }
+
+  http.addHeader("User-Agent", "ESP8266");
+  http.addHeader("Accept", "*/*");
+
+  comm.debug("Sending request...");
+  int httpCode = http.GET();
+  comm.debugf("HTTP code: %d", httpCode);
+
+  if (httpCode != 200) {
+    http.end();
+    comm.sendf("ERROR:HTTP_%d", httpCode);
+    return;
+  }
+
+  // Stream the response to avoid memory issues
+  WiFiClient* stream = http.getStreamPtr();
+  time_t now = timeClient.getEpochTime();
+
+  // Use static storage to reduce stack usage
+  static ICalEvent calEvents[20];
+  int calEventCount = 0;
+
+  String line = "";
+  String currentDtStart = "";
+  String currentSummary = "";
+  String currentRRule = "";
+  bool inEvent = false;
+  bool currentCancelled = false;
+  bool hasRecurrenceId = false;
+
+  comm.debugf("Parsing (max %d events)...", maxEvents);
+
+  unsigned long parseStart = millis();
+  unsigned long lastData = millis();
+  const unsigned long PARSE_TIMEOUT = 30000;
+  const unsigned long DATA_TIMEOUT = 5000;
+  int lineCount = 0;
+  int eventsSeen = 0;
+  int recurringCount = 0;
+
+  while (millis() - parseStart < PARSE_TIMEOUT) {
+    if (stream->available()) {
+      lastData = millis();
+      char c = stream->read();
+
+      if (c == '\n') {
+        line.trim();
+        lineCount++;
+
+        if (line == "BEGIN:VEVENT") {
+          inEvent = true;
+          currentDtStart = "";
+          currentSummary = "";
+          currentRRule = "";
+          currentCancelled = false;
+          hasRecurrenceId = false;
+        } else if (line == "END:VEVENT" && inEvent) {
+          inEvent = false;
+          eventsSeen++;
+
+          if (currentCancelled || hasRecurrenceId) {
+            line = "";
+            continue;
+          }
+
+          if (currentDtStart.length() > 0 && currentSummary.length() > 0) {
+            time_t dtstart = ICalParser::parseDate(currentDtStart.c_str());
+            ICalRRule rule = ICalParser::parseRRule(currentRRule.c_str());
+
+            if (rule.freq != ICAL_FREQ_NONE) {
+              recurringCount++;
+            }
+
+            time_t nextOccur = ICalParser::getNextOccurrence(dtstart, rule, now);
+
+            if (nextOccur > 0) {
+              // Insert sorted
+              int insertIdx = calEventCount;
+              for (int i = 0; i < calEventCount; i++) {
+                if (nextOccur < calEvents[i].occurrence) {
+                  insertIdx = i;
+                  break;
+                }
+              }
+
+              if (insertIdx < maxEvents) {
+                int shiftEnd = (calEventCount < maxEvents) ? calEventCount : maxEvents - 1;
+                for (int i = shiftEnd; i > insertIdx; i--) {
+                  calEvents[i] = calEvents[i - 1];
+                }
+
+                calEvents[insertIdx].occurrence = nextOccur;
+                struct tm* tmInfo = localtime(&nextOccur);
+                snprintf(calEvents[insertIdx].datetime, 20, "%04d-%02d-%02d %02d:%02d",
+                         tmInfo->tm_year + 1900, tmInfo->tm_mon + 1, tmInfo->tm_mday,
+                         tmInfo->tm_hour, tmInfo->tm_min);
+                strncpy(calEvents[insertIdx].title, currentSummary.c_str(), ICAL_MAX_TITLE_LEN - 1);
+                calEvents[insertIdx].title[ICAL_MAX_TITLE_LEN - 1] = '\0';
+
+                if (calEventCount < maxEvents) calEventCount++;
+              }
+            }
+          }
+        } else if (inEvent) {
+          if (line.startsWith("DTSTART")) {
+            int colonIdx = line.indexOf(':');
+            if (colonIdx > 0) {
+              currentDtStart = line.substring(colonIdx + 1);
+              currentDtStart.trim();
+            }
+          } else if (line.startsWith("SUMMARY:")) {
+            currentSummary = line.substring(8);
+          } else if (line.startsWith("RRULE:")) {
+            currentRRule = line.substring(6);
+          } else if (line.startsWith("STATUS:")) {
+            if (line.indexOf("CANCELLED") >= 0) {
+              currentCancelled = true;
+            }
+          } else if (line.startsWith("RECURRENCE-ID")) {
+            hasRecurrenceId = true;
+          }
+        }
+
+        line = "";
+        yield();
+      } else if (c != '\r') {
+        if (line.length() < 256) {
+          line += c;
+        }
+      }
+    } else {
+      if (millis() - lastData > DATA_TIMEOUT) {
+        comm.debug("Data timeout");
+        break;
+      }
+      if (!http.connected()) {
+        break;
+      }
+      yield();
+      delay(1);
+    }
+  }
+
+  comm.debugf("Parsed %d lines, %d events (%d recurring)", lineCount, eventsSeen, recurringCount);
+  http.end();
+  comm.debugf("Found %d upcoming events", calEventCount);
+
+  // Build response: CALENDAR:count,datetime|title;datetime|title;...
+  if (calEventCount == 0) {
+    comm.send("CALENDAR:0");
+  } else {
+    String response = "CALENDAR:";
+    response += String(calEventCount);
+    for (int i = 0; i < calEventCount; i++) {
+      response += (i == 0) ? "," : ";";
+      response += calEvents[i].datetime;
+      response += "|";
+      response += calEvents[i].title;
+    }
+    comm.send(response.c_str());
+  }
+}
+
+// ============================================================================
+// SETUP
+// ============================================================================
+
+void setup() {
+  // Set large RX buffer before Serial.begin()
+  Serial.setRxBufferSize(2048);
+  Serial.begin(115200);
+  Serial1.begin(115200);
+  Serial.setTimeout(100);
+
+  delay(100);
+
+  // Initialize communication library
+  comm.begin(Serial);
+  comm.setDebugStream(Serial1);
+
+  // Register command handlers
+  comm.onCommand("WIFI", handleWifiCommand);
+  comm.onCommand("STATUS", handleStatusCommand);
+  comm.onCommand("TIME", handleTimeCommand);
+  comm.onCommand("WEATHER", handleWeatherCommand);
+  comm.onCommand("STOCK", handleStockCommand);
+  comm.onCommand("BALANCE", handleBalanceCommand);
+  comm.onCommand("CALENDAR", handleCalendarCommand);
+  comm.onCommand("SET_CALENDAR_URL", handleSetCalendarUrlCommand);
+  comm.onCommand("GCP_PROJECT", handleGCPProjectCommand);
+  comm.onCommand("GCP_EMAIL", handleGCPEmailCommand);
+  comm.onCommand("GCP_KEY", handleGCPKeyCommand);
+
+  // Initialize EEPROM and credentials
+  EEPROM.begin(EEPROM_SIZE);
+  memset(&gcpCreds, 0, sizeof(gcpCreds));
+  memset(calendarUrl, 0, sizeof(calendarUrl));
+
+  if (!loadWiFiCredentials()) {
+    strncpy(wifiCreds.ssid, DEFAULT_WIFI_SSID, MAX_SSID_LEN);
+    strncpy(wifiCreds.password, DEFAULT_WIFI_PASSWORD, MAX_PASS_LEN);
+  }
+
+  // Start WiFi and NTP
+  startWiFiConnect();
+  timeClient.begin();
+
+  comm.sendError("READY");  // Signal ready to STM32
+}
+
+// ============================================================================
+// MAIN LOOP
+// ============================================================================
+
+void loop() {
+  // Handle WiFi state machine
+  handleAppWiFiState();
+
+  // Process incoming commands
+  comm.process();
+
+  // Keep NTP updated when connected
+  if (wifiState == WIFI_CONNECTED) {
+    timeClient.update();
+  }
+
+  // Try to initialize GSheet
+  if (!gsheetInitialized) {
+    tryInitGSheet();
+  }
+
+  // Fetch balance once GSheet is ready
+  if (gsheetInitialized && !taskComplete) {
+    static unsigned long lastAttempt = 0;
+    static bool authLogged = false;
+    unsigned long now = millis();
+
+    if (GSheet.ready()) {
+      if (!authLogged) {
+        authLogged = true;
+        comm.debug("GSheet.ready() returned true - auth complete!");
+      }
+
+      // Retry every 5 seconds if previous attempt failed
+      if (now - lastAttempt >= 5000) {
+        lastAttempt = now;
+        int balance = getBalance();
+        if (balance >= 0) {
+          comm.debugf("Balance: %d", balance);
+          taskComplete = true;
+        } else {
+          comm.debug("getBalance failed, will retry...");
+        }
+      }
+    } else {
+      if (now - lastAttempt >= 5000) {
+        lastAttempt = now;
+        comm.debug("Waiting for GSheet auth...");
+      }
+    }
+  }
+
+  yield();
+}
