@@ -1,0 +1,9 @@
+*:tests/unity/*
+*:Drivers/*
+*:/Users/user/STM32CubeIDE/workspace_1.14.0/libraries/*
+*:Core/Src/stm32f4xx_hal_msp.c
+*:Core/Src/stm32f4xx_it.c
+*:Core/Src/syscalls.c
+*:Core/Src/sysmem.c
+*:Core/Src/system_stm32f4xx.c
+*:Core/Src/main.c

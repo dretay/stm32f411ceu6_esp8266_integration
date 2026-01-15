@@ -1,0 +1,51 @@
+# Build outputs
+build/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
+
+# STM32CubeMX
+.mxproject
+
+# IDE and editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Python virtual environment
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Robot Framework outputs
+log.html
+report.html
+robot_output.xml
+output.xml
+
+# PlatformIO (esp8266_firmware has its own .gitignore)
+.pio/
+
+# Data/log files
+*.csv
+*.log
+
+# Compiled binaries
+*.elf
+*.bin
+*.hex
+*.map
+*.o
+*.d
+*.lst
+
+# Claude Code
+.claude/

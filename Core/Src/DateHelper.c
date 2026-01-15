@@ -1,4 +1,5 @@
 #include "DateHelper.h"
+#include <stdio.h>
 
 static char WEEKDAY_MAP[][10] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
 static char MONTH_MAP[][6] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sept", "Oct", "Nov", "Dec"};
@@ -25,7 +26,6 @@ static time_t get_epoch() {
 
   RTC_TimeTypeDef currentTime = get_time();
   RTC_DateTypeDef currentDate = get_date();
-  time_t timestamp;
   struct tm currTime;
 
   currTime.tm_year = currentDate.Year + 100;  // In fact: 2000 + 18 - 1900
@@ -76,7 +76,7 @@ static void to_string(char* buffer) {
   } else if (showHours > 12) {
     showHours -= 12;
   }
-  snprintf(buffer, 10, "%d:%02d %s", showHours, currentTime.Minutes, currentTime.Hours > 12 ? "PM" : "AM");
+  snprintf(buffer, 20, "%d:%02d %s", showHours, currentTime.Minutes, currentTime.Hours >= 12 ? "PM" : "AM");
 }
 
 const struct datehelper DateHelper = {.get_epoch = get_epoch,
