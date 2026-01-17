@@ -3,6 +3,7 @@
 
 static View* clock_view;
 extern TIM_HandleTypeDef htim1;
+extern TIM_HandleTypeDef htim3;
 extern SPI_HandleTypeDef hspi2;
 extern UART_HandleTypeDef huart2;
 #define DATA_SIZE 32
@@ -151,33 +152,43 @@ static void config() {
                       &calendar_url_printer);
   Disk.init();
 }
+
+static bool ESP_READY = false;
+// this is kinda awkward, but basically you need to wrap the callback so it can be properly invoked by the timer lib
+// since it needs to be able to pass it's own callback as well
+static void on_esp_status_received(esp_status_t* status);
+static void on_esp_status_received_cb(void) {
+  ESPComm.request_status(on_esp_status_received);
+}
+static void on_esp_status_received(esp_status_t* status) {
+  uint32_t now = HAL_GetTick();
+  if (!status->valid || !status->connected || status->gsheet_status != GSHEET_READY) {
+    Timer.in(5000, on_esp_status_received_cb);
+  } else {
+    ESP_READY = true;
+  }
+}
 static void init() {
   app_log_debug("Application init");
   // backlight PWM
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
+  HAL_TIM_Base_Start_IT(&htim3);
 
   // hold esp in reset
   //  HAL_GPIO_WritePin(ESP_RST_GPIO_Port, ESP_RST_Pin, GPIO_PIN_RESET);
 
   gfxInit();
+  Timer.init();
   gdispGSetOrientation(gdispGetDisplay(0), GDISP_ROTATE_0);
 
-  esp_comm_init(&huart2);
-  // Set WiFi credentials (saves to ESP EEPROM)
-  esp_comm_set_wifi(wifi_ssid, wifi_password);
+  ESPComm.init(&huart2);
 
-  // Set GCP credentials
-  esp_comm_set_gcp_project(project_id);
-  esp_comm_set_gcp_email(client_email);
-  esp_comm_set_gcp_key(private_key);
-
-  // Set calendar URL if configured
-  if (strlen(calendar_url) > 0) {
-    esp_comm_set_calendar_url(calendar_url);
-  }
-
-  // Check connection status
-  esp_comm_request_status();
+  ESPComm.set_wifi(wifi_ssid, wifi_password);
+  ESPComm.set_gcp_project(project_id);
+  ESPComm.set_gcp_email(client_email);
+  ESPComm.set_gcp_key(private_key);
+  ESPComm.set_calendar_url(calendar_url);
+  ESPComm.request_status(on_esp_status_received);
 
   clock_view = ClockView.init();
 
@@ -199,57 +210,55 @@ static void init() {
 static bool balance_requested = false;
 static bool balance_logged = false;
 
-// Status polling
-static uint32_t last_status_request = 0;
-#define STATUS_POLL_INTERVAL_MS 5000
-
 // TODO: a "settings" screen to control volume and brightness, persist in
 // eeprom, maybe alarm time?
 static void run(void) {
   //   SerialCommand.process();
   //  bank_view->render();
   get_current_view()->render();
-  // In loop
-  esp_comm_process();
-  Disk.process();  // Flush deferred USB mass storage writes to flash
-
-  const esp_status_t* status = esp_comm_get_last_status();
-  uint32_t now = HAL_GetTick();
-
-  // Poll status periodically until connected and gsheet ready
-  if (!status->valid || !status->connected || status->gsheet_status != GSHEET_READY) {
-    if (now - last_status_request >= STATUS_POLL_INTERVAL_MS) {
-      last_status_request = now;
-      esp_comm_request_status();
-    }
-  } else {
-    // GSheet is ready - request balance once
-    if (!balance_requested) {
-      app_log_debug("GSheet ready, requesting balance...");
-      esp_comm_request_balance();
-      balance_requested = true;
-    }
+  ESPComm.process();
+  Disk.process();
+  if (ESP_READY) {
+    app_log_debug("ESP IS READY!!!");
   }
 
-  // Check for balance response
-  const esp_balance_t* balance = esp_comm_get_last_balance();
-  if (balance->valid && !balance_logged) {
-    app_log_debug("Balance: %ld", (long)balance->balance);
-    balance_logged = true;
+  // const esp_status_t* status = esp_comm_get_last_status();
+  // uint32_t now = HAL_GetTick();
 
-    // Request calendar events (0 = default 10 events)
-    esp_comm_request_calendar(10);
+  // // Poll status periodically until connected and gsheet ready
+  // if (!status->valid || !status->connected || status->gsheet_status != GSHEET_READY) {
+  //   if (now - last_status_request >= STATUS_POLL_INTERVAL_MS) {
+  //     last_status_request = now;
+  //     esp_comm_request_status();
+  //   }
+  // } else {
+  //   // GSheet is ready - request balance once
+  //   if (!balance_requested) {
+  //     app_log_debug("GSheet ready, requesting balance...");
+  //     esp_comm_request_balance();
+  //     balance_requested = true;
+  //   }
+  // }
 
-    // Poll for response
-    const esp_calendar_t* cal = esp_comm_get_last_calendar();
-    if (cal->valid) {
-      for (int i = 0; i < cal->event_count; i++) {
-        app_log_debug("Event: %s - %s",
-                      cal->events[i].datetime,  // "2024-01-15 10:00"
-                      cal->events[i].title);    // "Meeting"
-      }
-    }
-  }
+  // // Check for balance response
+  // const esp_balance_t* balance = esp_comm_get_last_balance();
+  // if (balance->valid && !balance_logged) {
+  //   app_log_debug("Balance: %ld", (long)balance->balance);
+  //   balance_logged = true;
+
+  //   // Request calendar events (0 = default 10 events)
+  //   esp_comm_request_calendar(10);
+
+  //   // Poll for response
+  //   const esp_calendar_t* cal = esp_comm_get_last_calendar();
+  //   if (cal->valid) {
+  //     for (int i = 0; i < cal->event_count; i++) {
+  //       app_log_debug("Event: %s - %s",
+  //                     cal->events[i].datetime,  // "2024-01-15 10:00"
+  //                     cal->events[i].title);    // "Meeting"
+  //     }
+  //   }
+  // }
   //   if (DigitalEncoder.irq_raised()) {
   //     struct DigitalEncoderValue encoder_value = DigitalEncoder.query();
   //     if (encoder_value.encoder_value > old_encoder_value.encoder_value) {
@@ -270,6 +279,14 @@ void _Error_Handler(char* file, int line) {
   while (1) {
   }
   /* USER CODE END Error_Handler_Debug */
+}
+// Timer library callback should be triggered every 1ms
+// Timer_Clock / ((Prescaler + 1) × (Counter_Period + 1))
+// Don't forget you need to enable the interrupt in NVIC
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim) {
+  if (htim == &htim3) {
+    Timer.tick();
+  }
 }
 
 const struct application Application = {

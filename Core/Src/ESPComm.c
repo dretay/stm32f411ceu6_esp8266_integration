@@ -4,7 +4,7 @@
 // 2. Rename this to esp_comm.c
 // 3. Configure DMA in CubeMX as per ESP_README.md
 
-#include "esp_comm.h"
+#include "ESPComm.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -81,153 +81,6 @@ void esp_comm_init(UART_HandleTypeDef* huart) {
   HAL_UART_Receive_DMA(esp_uart, esp_rx_buffer, ESP_RX_BUFFER_SIZE);
 }
 
-void esp_comm_process(void) {
-  // Process DMA buffer for complete messages
-  esp_process_dma_buffer();
-
-  // Parse if message ready
-  if (esp_message_ready) {
-    esp_parse_response(esp_msg_buffer);
-    esp_message_ready = false;
-  }
-}
-
-bool esp_comm_request_time(void) {
-  return esp_queue_command("TIME\n");
-}
-
-bool esp_comm_request_weather(void) {
-  return esp_queue_command("WEATHER\n");
-}
-
-bool esp_comm_request_stock(const char* symbol) {
-  if (!symbol) {
-    return false;
-  }
-  char cmd[ESP_TX_BUFFER_SIZE];
-  snprintf(cmd, ESP_TX_BUFFER_SIZE, "STOCK:%s\n", symbol);
-  return esp_queue_command(cmd);
-}
-
-bool esp_comm_request_status(void) {
-  return esp_queue_command("STATUS\n");
-}
-
-bool esp_comm_request_balance(void) {
-  return esp_queue_command("BALANCE\n");
-}
-
-bool esp_comm_request_calendar(uint8_t max_events) {
-  if (max_events == 0) {
-    return esp_queue_command("CALENDAR\n");
-  } else {
-    char cmd[20];
-    snprintf(cmd, sizeof(cmd), "CALENDAR:%d\n", max_events);
-    return esp_queue_command(cmd);
-  }
-}
-
-bool esp_comm_set_wifi(const char* ssid, const char* password) {
-  if (!ssid || !password) {
-    return false;
-  }
-  char cmd[ESP_TX_BUFFER_SIZE];
-  snprintf(cmd, ESP_TX_BUFFER_SIZE, "WIFI:%s,%s\n", ssid, password);
-  return esp_queue_command(cmd);
-}
-
-bool esp_comm_set_gcp_project(const char* project_id) {
-  if (!project_id) {
-    return false;
-  }
-  char cmd[ESP_TX_BUFFER_SIZE];
-  snprintf(cmd, ESP_TX_BUFFER_SIZE, "GCP_PROJECT:%s\n", project_id);
-  return esp_queue_command(cmd);
-}
-
-bool esp_comm_set_gcp_email(const char* client_email) {
-  if (!client_email) {
-    return false;
-  }
-  char cmd[ESP_TX_BUFFER_SIZE];
-  snprintf(cmd, ESP_TX_BUFFER_SIZE, "GCP_EMAIL:%s\n", client_email);
-  return esp_queue_command(cmd);
-}
-
-bool esp_comm_set_gcp_key(const char* private_key) {
-  if (!private_key) {
-    return false;
-  }
-  char cmd[ESP_TX_BUFFER_SIZE];
-  snprintf(cmd, ESP_TX_BUFFER_SIZE, "GCP_KEY:%s\n", private_key);
-  return esp_queue_command(cmd);
-}
-
-bool esp_comm_set_calendar_url(const char* url) {
-  if (!url) {
-    return false;
-  }
-  char cmd[ESP_TX_BUFFER_SIZE];
-  snprintf(cmd, ESP_TX_BUFFER_SIZE, "SET_CALENDAR_URL:%s\n", url);
-  return esp_queue_command(cmd);
-}
-
-const esp_time_t* esp_comm_get_last_time(void) {
-  return &last_time;
-}
-
-const esp_weather_t* esp_comm_get_last_weather(void) {
-  return &last_weather;
-}
-
-const esp_stock_t* esp_comm_get_last_stock(void) {
-  return &last_stock;
-}
-
-const esp_status_t* esp_comm_get_last_status(void) {
-  return &last_status;
-}
-
-const esp_balance_t* esp_comm_get_last_balance(void) {
-  return &last_balance;
-}
-
-const esp_calendar_t* esp_comm_get_last_calendar(void) {
-  return &last_calendar;
-}
-
-void esp_comm_set_time_callback(esp_time_callback_t callback) {
-  time_callback = callback;
-}
-
-void esp_comm_set_weather_callback(esp_weather_callback_t callback) {
-  weather_callback = callback;
-}
-
-void esp_comm_set_stock_callback(esp_stock_callback_t callback) {
-  stock_callback = callback;
-}
-
-void esp_comm_set_status_callback(esp_status_callback_t callback) {
-  status_callback = callback;
-}
-
-void esp_comm_set_balance_callback(esp_balance_callback_t callback) {
-  balance_callback = callback;
-}
-
-void esp_comm_set_calendar_callback(esp_calendar_callback_t callback) {
-  calendar_callback = callback;
-}
-
-void esp_comm_set_error_callback(esp_error_callback_t callback) {
-  error_callback = callback;
-}
-
-bool esp_comm_is_ready(void) {
-  return esp_cmd_queue_count < ESP_CMD_QUEUE_SIZE;
-}
-
 // Internal implementation
 static bool esp_queue_command(const char* cmd) {
   size_t cmd_len = strlen(cmd);
@@ -284,8 +137,7 @@ static void esp_send_next_command(void) {
 
 static void esp_process_dma_buffer(void) {
   // Get current DMA position
-  uint16_t pos = ESP_RX_BUFFER_SIZE -
-                 __HAL_DMA_GET_COUNTER(esp_uart->hdmarx);
+  uint16_t pos = ESP_RX_BUFFER_SIZE - __HAL_DMA_GET_COUNTER(esp_uart->hdmarx);
 
   if (pos == esp_rx_old_pos) {
     return;  // No new data
@@ -356,8 +208,7 @@ static void esp_parse_time(const char* data) {
   esp_time_t time = {0};
 
   int year, month, day, hour, minute, second;
-  if (sscanf(data, "%d-%d-%dT%d:%d:%dZ", &year, &month, &day, &hour, &minute,
-             &second) == 6) {
+  if (sscanf(data, "%d-%d-%dT%d:%d:%dZ", &year, &month, &day, &hour, &minute, &second) == 6) {
     time.year = year;
     time.month = month;
     time.day = day;
@@ -382,8 +233,7 @@ static void esp_parse_weather(const char* data) {
   int temp_f, temp_c, humidity;
   char condition[32];
 
-  if (sscanf(data, "%d,%d,%31[^,],%d", &temp_f, &temp_c, condition,
-             &humidity) == 4) {
+  if (sscanf(data, "%d,%d,%31[^,],%d", &temp_f, &temp_c, condition, &humidity) == 4) {
     weather.temp_f = temp_f;
     strncpy(weather.condition, condition, sizeof(weather.condition) - 1);
     weather.condition[sizeof(weather.condition) - 1] = '\0';
@@ -539,7 +389,8 @@ static void esp_parse_calendar(const char* data) {
 
     // Find the pipe separator (datetime|title)
     const char* pipe = strchr(ptr, '|');
-    if (!pipe) break;
+    if (!pipe)
+      break;
 
     // Copy datetime
     size_t datetime_len = pipe - ptr;
@@ -579,8 +430,147 @@ static void esp_parse_calendar(const char* data) {
   }
 }
 
+//
+// refactoring starts here!!!
+//
+static void init(UART_HandleTypeDef* huart) {
+  esp_uart = huart;
+  esp_rx_old_pos = 0;
+  esp_message_ready = false;
+  esp_tx_busy = false;
+  esp_cmd_queue_head = 0;
+  esp_cmd_queue_tail = 0;
+  esp_cmd_queue_count = 0;
+
+  // Enable UART idle line interrupt
+  SET_BIT(esp_uart->Instance->CR1, USART_CR1_IDLEIE);
+
+  // Start DMA reception in circular mode
+  HAL_UART_Receive_DMA(esp_uart, esp_rx_buffer, ESP_RX_BUFFER_SIZE);
+}
+static bool set_wifi(const char* ssid, const char* password) {
+  if (!ssid || !password) {
+    return false;
+  }
+  char cmd[ESP_TX_BUFFER_SIZE];
+  snprintf(cmd, ESP_TX_BUFFER_SIZE, "WIFI:%s,%s\n", ssid, password);
+  return esp_queue_command(cmd);
+}
+
+static bool set_gcp_project(const char* project_id) {
+  if (!project_id) {
+    return false;
+  }
+  char cmd[ESP_TX_BUFFER_SIZE];
+  snprintf(cmd, ESP_TX_BUFFER_SIZE, "GCP_PROJECT:%s\n", project_id);
+  return esp_queue_command(cmd);
+}
+
+static bool set_gcp_email(const char* client_email) {
+  if (!client_email) {
+    return false;
+  }
+  char cmd[ESP_TX_BUFFER_SIZE];
+  snprintf(cmd, ESP_TX_BUFFER_SIZE, "GCP_EMAIL:%s\n", client_email);
+  return esp_queue_command(cmd);
+}
+
+static bool set_gcp_key(const char* private_key) {
+  if (!private_key) {
+    return false;
+  }
+  char cmd[ESP_TX_BUFFER_SIZE];
+  snprintf(cmd, ESP_TX_BUFFER_SIZE, "GCP_KEY:%s\n", private_key);
+  return esp_queue_command(cmd);
+}
+
+static bool set_calendar_url(const char* url) {
+  if (!url) {
+    return false;
+  }
+  char cmd[ESP_TX_BUFFER_SIZE];
+  snprintf(cmd, ESP_TX_BUFFER_SIZE, "SET_CALENDAR_URL:%s\n", url);
+  return esp_queue_command(cmd);
+}
+
+static bool request_time(esp_time_callback_t callback) {
+  if (callback) {
+    time_callback = callback;
+  } else {
+    return false;
+  }
+  return esp_queue_command("TIME\n");
+}
+
+static bool request_weather(esp_weather_callback_t callback) {
+  if (callback) {
+    weather_callback = callback;
+  } else {
+    return false;
+  }
+  return esp_queue_command("WEATHER\n");
+}
+
+static bool request_stock(const char* symbol, esp_stock_callback_t callback) {
+  if (callback) {
+    stock_callback = callback;
+  } else {
+    return false;
+  }
+  if (!symbol) {
+    return false;
+  }
+  char cmd[ESP_TX_BUFFER_SIZE];
+  snprintf(cmd, ESP_TX_BUFFER_SIZE, "STOCK:%s\n", symbol);
+  return esp_queue_command(cmd);
+}
+
+static bool request_status(esp_status_callback_t callback) {
+  if (callback) {
+    status_callback = callback;
+  } else {
+    return false;
+  }
+  return esp_queue_command("STATUS\n");
+}
+
+static bool request_balance(esp_balance_callback_t callback) {
+  if (callback) {
+    balance_callback = callback;
+  } else {
+    return false;
+  }
+  return esp_queue_command("BALANCE\n");
+}
+
+static bool request_calendar(uint8_t max_events, esp_calendar_callback_t callback) {
+  if (callback) {
+    calendar_callback = callback;
+  } else {
+    return false;
+  }
+  if (max_events == 0) {
+    return esp_queue_command("CALENDAR\n");
+  } else {
+    char cmd[20];
+    snprintf(cmd, sizeof(cmd), "CALENDAR:%d\n", max_events);
+    return esp_queue_command(cmd);
+  }
+}
+
+void process(void) {
+  // Process DMA buffer for complete messages
+  esp_process_dma_buffer();
+
+  // Parse if message ready
+  if (esp_message_ready) {
+    esp_parse_response(esp_msg_buffer);
+    esp_message_ready = false;
+  }
+}
+
 // Helper function to be called from USART2_IRQHandler in stm32f4xx_it.c
-void esp_comm_uart_irq_handler(void) {
+static void uart_irq_handler(void) {
   // Handle UART idle line interrupt
   if (esp_uart && READ_BIT(esp_uart->Instance->SR, USART_SR_IDLE)) {
     // Clear idle flag by reading SR then DR
@@ -606,4 +596,19 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef* huart) {
     esp_rx_old_pos = 0;
   }
 }
-
+const struct espcomm ESPComm = {
+    .init = init,
+    .set_wifi = set_wifi,
+    .set_gcp_project = set_gcp_project,
+    .set_gcp_email = set_gcp_email,
+    .set_gcp_key = set_gcp_key,
+    .set_calendar_url = set_calendar_url,
+    .request_time = request_time,
+    .request_weather = request_weather,
+    .request_stock = request_stock,
+    .request_status = request_status,
+    .request_balance = request_balance,
+    .request_calendar = request_calendar,
+    .uart_irq_handler = uart_irq_handler,
+    .process = process,
+};

@@ -9,8 +9,9 @@
 #include "ClockView.h"
 #include "gfx.h"
 
+#include "ESPComm.h"
+#include "Timer.h"
 #include "disk.h"
-#include "esp_comm.h"
 #include "main.h"
 
 struct application {

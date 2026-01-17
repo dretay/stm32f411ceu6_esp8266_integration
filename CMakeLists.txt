@@ -70,6 +70,9 @@ file(GLOB RINGBUFFER_SOURCES
 file(GLOB USB_MASSSTORAGE_SOURCES
     /Users/user/STM32CubeIDE/workspace_1.14.0/libraries/stm32_usb_mass_storage/src/*.c
 )
+file(GLOB STM32_TIMER_SOURCES
+    /Users/user/STM32CubeIDE/workspace_1.14.0/libraries/stm32_timer/release/src/*.c
+)
 
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
@@ -79,6 +82,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${RINGBUFFER_SOURCES}
     ${LOGGER_SOURCES}
     ${USB_MASSSTORAGE_SOURCES}
+    ${STM32_TIMER_SOURCES}
 )
 
 # Add include paths
@@ -94,6 +98,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     /Users/user/STM32CubeIDE/workspace_1.14.0/libraries/uc1698/inc
     /Users/user/STM32CubeIDE/workspace_1.14.0/libraries/rtt_logger/inc
     /Users/user/STM32CubeIDE/workspace_1.14.0/libraries/stm32_usb_mass_storage/inc
+    /Users/user/STM32CubeIDE/workspace_1.14.0/libraries/stm32_timer/release/include
 )
 
 # Add project symbols (macros)
