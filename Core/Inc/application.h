@@ -7,6 +7,7 @@
 #endif
 
 #include "ClockView.h"
+#include "FlipClockView.h"
 #include "gfx.h"
 
 #include "ESPComm.h"

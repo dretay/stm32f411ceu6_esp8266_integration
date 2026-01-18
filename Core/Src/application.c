@@ -2,6 +2,7 @@
 #include <stdio.h>
 
 static View* clock_view;
+static View* flip_clock_view;
 extern TIM_HandleTypeDef htim1;
 extern TIM_HandleTypeDef htim3;
 extern SPI_HandleTypeDef hspi2;
@@ -137,6 +138,7 @@ static bool ESP_READY = false;
 // this is kinda awkward, but basically you need to wrap the callbacks for all the async
 // functions so they can be properly invoked by the timer lib
 // since it needs to be able to pass it's own callback as well
+static void on_esp_weather_received(esp_weather_t* weather);
 static void on_esp_status_received(esp_status_t* status);
 static void on_esp_status_received_cb(void) {
   ESPComm.request_status(on_esp_status_received);
@@ -146,6 +148,8 @@ static void on_esp_status_received(esp_status_t* status) {
     Timer.in(5000, on_esp_status_received_cb);
   } else {
     ESP_READY = true;
+    // Request weather data now that ESP is ready
+    ESPComm.request_weather(on_esp_weather_received);
   }
   app_log_debug("ESP status: valid=%d connected=%d connecting=%d rssi=%d gsheet=%d ip=%s", status->valid,
                 status->connected, status->connecting, status->rssi, status->gsheet_status, status->ip_address);
@@ -170,6 +174,25 @@ static void on_esp_calendar_received(esp_calendar_t* cal) {
     app_log_error("Unable to fetch calendar!");
   }
 }
+
+// Weather handling
+static void on_esp_weather_received(esp_weather_t* weather);
+static void request_weather_cb(void) {
+  ESPComm.request_weather(on_esp_weather_received);
+}
+static void on_esp_weather_received(esp_weather_t* weather) {
+  if (weather->valid) {
+    app_log_debug("Weather: %d°F, %s, humidity=%d%%", weather->temp_f, weather->condition, weather->humidity);
+    // Update FlipClockView with weather data
+    // Note: precip_chance not available from current API, passing 0
+    // The condition string (e.g. "Rain", "Cloudy") will trigger icon display
+    FlipClockView.set_weather(weather->temp_f, weather->condition, 0);
+  } else {
+    app_log_error("Unable to fetch weather!");
+  }
+  // Request weather again in 10 minutes
+  Timer.in(600000, request_weather_cb);
+}
 static void init() {
   app_log_debug("Application init");
   // backlight PWM
@@ -179,16 +202,23 @@ static void init() {
   gfxInit();
   gdispGSetOrientation(gdispGetDisplay(0), GDISP_ROTATE_0);
   clock_view = ClockView.init();
+  flip_clock_view = FlipClockView.init();
 
   Timer.init();
 
   ESPComm.init(&huart2);
   ESPComm.set_wifi(wifi_ssid, wifi_password);
+  HAL_Delay(100);
   ESPComm.set_gcp_project(project_id);
+  HAL_Delay(100);
   ESPComm.set_gcp_email(client_email);
+  HAL_Delay(100);
   ESPComm.set_gcp_key(private_key);
+  HAL_Delay(100);
   ESPComm.set_calendar_url(calendar_url);
+  HAL_Delay(100);
   ESPComm.request_status(on_esp_status_received);
+  HAL_Delay(100);
 
   //  DFPlayerMini.init();
   //  DFPlayerMini.volumeAdjustSet(30);
@@ -202,73 +232,22 @@ static void init() {
 // TODO: a "settings" screen to control volume and brightness, persist in
 // eeprom, maybe alarm time?
 static void run(void) {
-  //   SerialCommand.process();
   //  bank_view->render();
-  get_current_view()->render();
+  // get_current_view()->render();
+  flip_clock_view->render();
   ESPComm.process();
   Disk.process();
-  if (ESP_READY && (!ESP_BALANCE_RECEIVED || !ESP_CALENDAR_RECEIVED)) {
-    if (!ESP_BALANCE_REQUESTED && !ESP_BALANCE_RECEIVED) {
-      app_log_debug("Requesting balance");
-      ESPComm.request_balance(on_esp_balance_received);
-      ESP_BALANCE_REQUESTED = true;
-    } else if (ESP_BALANCE_RECEIVED && !ESP_CALENDAR_REQUESTED && !ESP_CALENDAR_RECEIVED) {
-      app_log_debug("Requesting calendar");
-      ESPComm.request_calendar(10, on_esp_calendar_received);
-      ESP_CALENDAR_REQUESTED = true;
-    }
-  }
-
-  // const esp_status_t* status = esp_comm_get_last_status();
-  // uint32_t now = HAL_GetTick();
-
-  // // Poll status periodically until connected and gsheet ready
-  // if (!status->valid || !status->connected || status->gsheet_status != GSHEET_READY) {
-  //   if (now - last_status_request >= STATUS_POLL_INTERVAL_MS) {
-  //     last_status_request = now;
-  //     esp_comm_request_status();
-  //   }
-  // } else {
-  //   // GSheet is ready - request balance once
-  //   if (!balance_requested) {
-  //     app_log_debug("GSheet ready, requesting balance...");
-  //     esp_comm_request_balance();
-  //     balance_requested = true;
+  // if (ESP_READY && (!ESP_BALANCE_RECEIVED || !ESP_CALENDAR_RECEIVED)) {
+  //   if (!ESP_BALANCE_REQUESTED && !ESP_BALANCE_RECEIVED) {
+  //     app_log_debug("Requesting balance");
+  //     ESPComm.request_balance(on_esp_balance_received);
+  //     ESP_BALANCE_REQUESTED = true;
+  //   } else if (ESP_BALANCE_RECEIVED && !ESP_CALENDAR_REQUESTED && !ESP_CALENDAR_RECEIVED) {
+  //     app_log_debug("Requesting calendar");
+  //     ESPComm.request_calendar(10, on_esp_calendar_received);
+  //     ESP_CALENDAR_REQUESTED = true;
   //   }
   // }
-
-  // // Check for balance response
-  // const esp_balance_t* balance = esp_comm_get_last_balance();
-  // if (balance->valid && !balance_logged) {
-  //   app_log_debug("Balance: %ld", (long)balance->balance);
-  //   balance_logged = true;
-
-  //   // Request calendar events (0 = default 10 events)
-  //   esp_comm_request_calendar(10);
-
-  //   // Poll for response
-  //   const esp_calendar_t* cal = esp_comm_get_last_calendar();
-  //   if (cal->valid) {
-  //     for (int i = 0; i < cal->event_count; i++) {
-  //       app_log_debug("Event: %s - %s",
-  //                     cal->events[i].datetime,  // "2024-01-15 10:00"
-  //                     cal->events[i].title);    // "Meeting"
-  //     }
-  //   }
-  // }
-  //   if (DigitalEncoder.irq_raised()) {
-  //     struct DigitalEncoderValue encoder_value = DigitalEncoder.query();
-  //     if (encoder_value.encoder_value > old_encoder_value.encoder_value) {
-  //       next_view(views, VIEW_COUNT, &CURRENT_VIEW);
-  //     } else if (encoder_value.encoder_value <
-  //     old_encoder_value.encoder_value) {
-  //       prev_view(views, VIEW_COUNT, &CURRENT_VIEW);
-  //     } else if (encoder_value.button_value == true) {
-  //       int songToPlay = DateHelper.minutes_since_midnight();
-  //       DFPlayerMini.playFromMP3Folder(songToPlay);
-  //     }
-  //     old_encoder_value = encoder_value;
-  //   }
 }
 void _Error_Handler(char* file, int line) {
   /* USER CODE BEGIN Error_Handler_Debug */
