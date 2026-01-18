@@ -11,25 +11,25 @@ static View view;
 #define DISPLAY_HEIGHT 160
 
 // Large digit dimensions (for time)
-#define DIGIT_WIDTH    32
-#define DIGIT_HEIGHT   52
-#define SEGMENT_THICK  6
+#define DIGIT_WIDTH    38
+#define DIGIT_HEIGHT   92
+#define SEGMENT_THICK  10
 #define DIGIT_SPACING  4
 
 // Medium digit dimensions (for day/date)
-#define MED_DIGIT_WIDTH   18
-#define MED_DIGIT_HEIGHT  28
-#define MED_SEGMENT_THICK 4
+#define MED_DIGIT_WIDTH   16
+#define MED_DIGIT_HEIGHT  24
+#define MED_SEGMENT_THICK 3
 #define MED_DIGIT_SPACING 2
 
 // Layout Y positions
-#define TIME_Y         6
-#define LINE1_Y        62
-#define DATE_LABEL_Y   66
-#define DATE_Y         78
-#define LINE2_Y        110
-#define TEMP_LABEL_Y   114
-#define TEMP_Y         126
+#define TIME_Y         2
+#define LINE1_Y        98
+#define DATE_LABEL_Y   102
+#define DATE_Y         112
+#define LINE2_Y        138
+#define TEMP_LABEL_Y   140
+#define TEMP_Y         144
 
 // Weather state
 static flipclock_weather_t weather_data = {0};
@@ -291,6 +291,33 @@ static void draw_degree_symbol(int x, int y) {
   gdispDrawCircle(x + 2, y + 3, 2, White);
 }
 
+// Draw sun icon
+static void draw_sun_icon(int x, int y, int size) {
+  int cx = x + size / 2;
+  int cy = y + size / 2;
+  int r = size / 3;
+  // Draw circle for sun body
+  gdispFillCircle(cx, cy, r, White);
+  // Draw rays
+  int ray_len = size / 4;
+  int ray_start = r + 1;
+  gdispDrawLine(cx, cy - ray_start, cx, cy - ray_start - ray_len, White);  // top
+  gdispDrawLine(cx, cy + ray_start, cx, cy + ray_start + ray_len, White);  // bottom
+  gdispDrawLine(cx - ray_start, cy, cx - ray_start - ray_len, cy, White);  // left
+  gdispDrawLine(cx + ray_start, cy, cx + ray_start + ray_len, cy, White);  // right
+}
+
+// Draw moon icon (crescent)
+static void draw_moon_icon(int x, int y, int size) {
+  int cx = x + size / 2;
+  int cy = y + size / 2;
+  int r = size / 2 - 1;
+  // Draw filled circle
+  gdispFillCircle(cx, cy, r, White);
+  // Cut out a smaller circle to create crescent (draw in black)
+  gdispFillCircle(cx + r/2, cy - r/4, r - 1, Black);
+}
+
 // Determine precipitation type from condition string
 typedef enum {
   PRECIP_NONE,
@@ -320,19 +347,17 @@ static precip_type_t get_precip_type(const char* condition) {
   return PRECIP_NONE;
 }
 
-// Draw temperature section with thermometer, temp, forecast, precipitation
+// Draw temperature section with temp, condition, icon, precipitation
 static void draw_temp(void) {
-  // Draw thermometer in bottom left
-  draw_thermometer(8, TEMP_Y, 28);
-
   font_t font = gdispOpenFont("DejaVuSans16");
+  int text_x = 4;
 
   if (!weather_data.valid) {
     // Show placeholder when no data
-    gdispDrawString(30, TEMP_Y + 6, "--", font, White);
+    gdispDrawString(text_x, TEMP_Y + 1, "--", font, White);
     int dash_width = gdispGetStringWidth("--", font);
-    draw_degree_symbol(30 + dash_width, TEMP_Y + 6);
-    gdispDrawString(30 + dash_width + 8, TEMP_Y + 6, "F", font, White);
+    draw_degree_symbol(text_x + dash_width, TEMP_Y + 1);
+    gdispDrawString(text_x + dash_width + 8, TEMP_Y + 1, "F", font, White);
     gdispCloseFont(font);
     return;
   }
@@ -340,57 +365,66 @@ static void draw_temp(void) {
   // Draw temperature value
   char temp_val[8];
   snprintf(temp_val, sizeof(temp_val), "%d", weather_data.temp_f);
-  gdispDrawString(30, TEMP_Y + 6, temp_val, font, White);
+  gdispDrawString(text_x, TEMP_Y + 1, temp_val, font, White);
   int temp_width = gdispGetStringWidth(temp_val, font);
 
   // Draw degree symbol manually
-  draw_degree_symbol(30 + temp_width, TEMP_Y + 6);
+  draw_degree_symbol(text_x + temp_width, TEMP_Y + 1);
 
   // Draw F
-  gdispDrawString(30 + temp_width + 8, TEMP_Y + 6, "F", font, White);
+  gdispDrawString(text_x + temp_width + 8, TEMP_Y + 1, "F", font, White);
   int f_width = gdispGetStringWidth("F", font);
   int total_temp_width = temp_width + 8 + f_width;
 
-  // Draw condition/forecast (truncate if too long)
-  char condition_short[12];
+  // Draw condition/forecast (truncate to fit before icon)
+  char condition_short[10];
   strncpy(condition_short, weather_data.condition, sizeof(condition_short) - 1);
   condition_short[sizeof(condition_short) - 1] = '\0';
 
-  gdispDrawString(30 + total_temp_width + 6, TEMP_Y + 6, condition_short, font, White);
+  gdispDrawString(text_x + total_temp_width + 8, TEMP_Y + 1, condition_short, font, White);
 
-  // Determine precipitation type and whether to show icon
+  // Icon and percentage at far right
+  int icon_x = DISPLAY_WIDTH - 38;
+  int precip_x = DISPLAY_WIDTH - 24;
+
+  // Determine precipitation type for icon
   precip_type_t precip = get_precip_type(weather_data.condition);
-  bool has_precip = weather_data.precip_chance > 0 || precip != PRECIP_NONE;
 
-  if (has_precip) {
-    // Draw appropriate icon in bottom right area
-    int precip_x = DISPLAY_WIDTH - 40;
+  // Get current hour to determine day/night
+  RTC_TimeTypeDef currentTime;
+  RTC_DateTypeDef currentDate;
+  HAL_RTC_GetTime(&hrtc, &currentTime, RTC_FORMAT_BIN);
+  HAL_RTC_GetDate(&hrtc, &currentDate, RTC_FORMAT_BIN);
+  bool is_day = (currentTime.Hours >= 6 && currentTime.Hours < 18);
 
-    // Use detected precip type, or default to rain if only chance is set
-    if (precip == PRECIP_NONE) precip = PRECIP_RAIN;
-
-    switch (precip) {
-      case PRECIP_SNOW:
-        draw_snow_icon(precip_x, TEMP_Y + 2, 12);
-        break;
-      case PRECIP_SLEET:
-        draw_sleet_icon(precip_x, TEMP_Y + 2, 12);
-        break;
-      case PRECIP_RAIN:
-      default:
-        draw_rain_icon(precip_x, TEMP_Y + 2, 12);
-        break;
-    }
-
-    // Draw precipitation percentage
-    if (weather_data.precip_chance > 0) {
-      char precip_str[8];
-      snprintf(precip_str, sizeof(precip_str), "%d%%", weather_data.precip_chance);
-      font_t precip_font = gdispOpenFont("DejaVuSans10");
-      gdispDrawString(precip_x + 14, TEMP_Y + 8, precip_str, precip_font, White);
-      gdispCloseFont(precip_font);
-    }
+  // Always draw weather icon
+  switch (precip) {
+    case PRECIP_SNOW:
+      draw_snow_icon(icon_x, TEMP_Y, 10);
+      break;
+    case PRECIP_SLEET:
+      draw_sleet_icon(icon_x, TEMP_Y, 10);
+      break;
+    case PRECIP_RAIN:
+      draw_rain_icon(icon_x, TEMP_Y, 10);
+      break;
+    case PRECIP_NONE:
+    default:
+      // Show sun during day, moon at night
+      if (is_day) {
+        draw_sun_icon(icon_x, TEMP_Y, 10);
+      } else {
+        draw_moon_icon(icon_x, TEMP_Y, 10);
+      }
+      break;
   }
+
+  // Always draw precipitation percentage for consistent layout
+  char precip_str[8];
+  snprintf(precip_str, sizeof(precip_str), "%d%%", weather_data.precip_chance);
+  font_t precip_font = gdispOpenFont("DejaVuSans10");
+  gdispDrawString(precip_x, TEMP_Y + 3, precip_str, precip_font, White);
+  gdispCloseFont(precip_font);
 
   gdispCloseFont(font);
 }
