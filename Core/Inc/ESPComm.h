@@ -20,6 +20,7 @@ typedef struct {
   int16_t temp_f;
   char condition[32];
   uint8_t humidity;
+  uint8_t precip_chance;  // 0-100 percentage
   bool valid;
 } esp_weather_t;
 
@@ -78,6 +79,8 @@ struct espcomm {
   bool (*set_gcp_email)(const char*);
   bool (*set_gcp_key)(const char*);
   bool (*set_calendar_url)(const char*);
+  bool (*set_weather_api_key)(const char*);
+  bool (*set_weather_location)(const char*, const char*);
   bool (*request_time)(esp_time_callback_t);
   bool (*request_weather)(esp_weather_callback_t);
   bool (*request_stock)(const char*, esp_stock_callback_t);

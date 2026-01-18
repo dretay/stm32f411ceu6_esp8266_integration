@@ -26,10 +26,13 @@
 const char* DEFAULT_WIFI_SSID = "YourWiFiSSID";
 const char* DEFAULT_WIFI_PASSWORD = "YourWiFiPassword";
 
-// Weather API (OpenWeatherMap)
-const char* WEATHER_API_KEY = "your_api_key_here";
-const char* WEATHER_CITY = "San Francisco";
-const char* WEATHER_COUNTRY_CODE = "US";
+// Weather API (OpenWeatherMap) - defaults, can be overridden via serial
+#define MAX_WEATHER_API_KEY_LEN 64
+#define MAX_WEATHER_CITY_LEN 64
+#define MAX_WEATHER_COUNTRY_LEN 8
+char weatherApiKey[MAX_WEATHER_API_KEY_LEN + 1] = "your_api_key_here";
+char weatherCity[MAX_WEATHER_CITY_LEN + 1] = "San Francisco";
+char weatherCountry[MAX_WEATHER_COUNTRY_LEN + 1] = "US";
 
 // Stock API (Alpha Vantage)
 const char* STOCK_API_KEY = "your_api_key_here";
@@ -319,14 +322,20 @@ void handleWeatherCommand(const char* params) {
     return;
   }
 
-  // Build API URL
-  String url = "http://api.openweathermap.org/data/2.5/weather?q=";
-  url += WEATHER_CITY;
+  // Check if weather API key is configured
+  if (strlen(weatherApiKey) == 0 || strcmp(weatherApiKey, "your_api_key_here") == 0) {
+    comm.sendError("WEATHER_API_KEY_NOT_SET");
+    return;
+  }
+
+  // Use forecast API to get precipitation probability (pop)
+  String url = "http://api.openweathermap.org/data/2.5/forecast?q=";
+  url += weatherCity;
   url += ",";
-  url += WEATHER_COUNTRY_CODE;
+  url += weatherCountry;
   url += "&appid=";
-  url += WEATHER_API_KEY;
-  url += "&units=metric";
+  url += weatherApiKey;
+  url += "&units=metric&cnt=1";  // Only get first forecast period
 
   WiFiClient client;
   HTTPClient http;
@@ -342,19 +351,28 @@ void handleWeatherCommand(const char* params) {
   String payload = http.getString();
   http.end();
 
-  StaticJsonDocument<1024> doc;
-  if (deserializeJson(doc, payload)) {
+  // Forecast API response is larger than current weather API
+  StaticJsonDocument<2048> doc;
+  DeserializationError err = deserializeJson(doc, payload);
+  if (err) {
+    comm.debugf("JSON parse error: %s", err.c_str());
     comm.sendError("JSON_PARSE");
     return;
   }
 
-  float temp_c = doc["main"]["temp"];
+  // Forecast API returns data in list[0] for first period
+  JsonObject forecast = doc["list"][0];
+  float temp_c = forecast["main"]["temp"];
   int temp_f = (int)(temp_c * 9.0 / 5.0 + 32.0);
-  const char* condition = doc["weather"][0]["main"];
-  int humidity = doc["main"]["humidity"];
+  const char* condition = forecast["weather"][0]["main"];
+  int humidity = forecast["main"]["humidity"];
+
+  // pop is probability of precipitation (0.0 to 1.0)
+  float pop = forecast["pop"] | 0.0;
+  int precip_chance = (int)(pop * 100);
 
   String response = "WEATHER:";
-  response += String(temp_f) + "," + String((int)temp_c) + "," + String(condition) + "," + String(humidity);
+  response += String(temp_f) + "," + String((int)temp_c) + "," + String(condition) + "," + String(humidity) + "," + String(precip_chance);
 
   cache.weatherData = response;
   cache.lastWeatherUpdate = now;
@@ -483,6 +501,51 @@ void handleSetCalendarUrlCommand(const char* params) {
   strncpy(calendarUrl, params, MAX_CALENDAR_URL_LEN);
   calendarUrl[MAX_CALENDAR_URL_LEN] = '\0';
   comm.debugf("Calendar URL set, len: %d", strlen(calendarUrl));
+  comm.sendOK();
+}
+
+void handleSetWeatherApiKeyCommand(const char* params) {
+  if (strlen(params) == 0 || strlen(params) > MAX_WEATHER_API_KEY_LEN) {
+    comm.sendError("INVALID_WEATHER_API_KEY");
+    return;
+  }
+  strncpy(weatherApiKey, params, MAX_WEATHER_API_KEY_LEN);
+  weatherApiKey[MAX_WEATHER_API_KEY_LEN] = '\0';
+  // Clear weather cache when API key changes
+  cache.weatherData = "";
+  cache.lastWeatherUpdate = 0;
+  comm.debugf("Weather API key set, len: %d", strlen(weatherApiKey));
+  comm.sendOK();
+}
+
+void handleSetWeatherLocationCommand(const char* params) {
+  // Parse city,country
+  char city[MAX_WEATHER_CITY_LEN + 1];
+  char country[MAX_WEATHER_COUNTRY_LEN + 1];
+
+  int nextPos = stm32comm_parseParam(params, city, sizeof(city), 0);
+  if (nextPos < 0) {
+    comm.sendError("INVALID_WEATHER_LOCATION_FORMAT");
+    return;
+  }
+  stm32comm_parseParam(params, country, sizeof(country), nextPos);
+
+  if (strlen(city) == 0 || strlen(city) > MAX_WEATHER_CITY_LEN ||
+      strlen(country) == 0 || strlen(country) > MAX_WEATHER_COUNTRY_LEN) {
+    comm.sendError("INVALID_WEATHER_LOCATION_PARAMS");
+    return;
+  }
+
+  strncpy(weatherCity, city, MAX_WEATHER_CITY_LEN);
+  weatherCity[MAX_WEATHER_CITY_LEN] = '\0';
+  strncpy(weatherCountry, country, MAX_WEATHER_COUNTRY_LEN);
+  weatherCountry[MAX_WEATHER_COUNTRY_LEN] = '\0';
+
+  // Clear weather cache when location changes
+  cache.weatherData = "";
+  cache.lastWeatherUpdate = 0;
+
+  comm.debugf("Weather location set: %s, %s", weatherCity, weatherCountry);
   comm.sendOK();
 }
 
@@ -710,6 +773,8 @@ void setup() {
   comm.onCommand("BALANCE", handleBalanceCommand);
   comm.onCommand("CALENDAR", handleCalendarCommand);
   comm.onCommand("SET_CALENDAR_URL", handleSetCalendarUrlCommand);
+  comm.onCommand("SET_WEATHER_API_KEY", handleSetWeatherApiKeyCommand);
+  comm.onCommand("SET_WEATHER_LOCATION", handleSetWeatherLocationCommand);
   comm.onCommand("GCP_PROJECT", handleGCPProjectCommand);
   comm.onCommand("GCP_EMAIL", handleGCPEmailCommand);
   comm.onCommand("GCP_KEY", handleGCPKeyCommand);

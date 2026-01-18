@@ -38,6 +38,9 @@ View* get_current_view(void) {
 #define MAX_EMAIL_LEN 256
 #define MAX_PRIVATE_KEY_LEN 2048
 #define MAX_CALENDAR_URL_LEN 256
+#define MAX_API_KEY_LEN 64
+#define MAX_CITY_LEN 64
+#define MAX_COUNTRY_LEN 8
 
 static char wifi_ssid[MAX_SSID_LEN];
 static char wifi_password[MAX_PASSWORD_LEN];
@@ -45,6 +48,9 @@ static char project_id[MAX_PROJECT_ID_LEN];
 static char client_email[MAX_EMAIL_LEN];
 static char private_key[MAX_PRIVATE_KEY_LEN];
 static char calendar_url[MAX_CALENDAR_URL_LEN];
+static char openweather_api_key[MAX_API_KEY_LEN];
+static char weather_city[MAX_CITY_LEN];
+static char weather_country[MAX_COUNTRY_LEN];
 
 // WIFI_SSID
 bool wifi_ssid_validator(u8 str[]) {
@@ -118,6 +124,42 @@ void calendar_url_printer(char* buffer, size_t buffer_size) {
   snprintf(buffer, buffer_size, "CALENDAR_URL=%s", calendar_url);
 }
 
+// OPENWEATHER_API_KEY
+bool openweather_api_key_validator(u8 str[]) {
+  return strlen((char*)str) < MAX_API_KEY_LEN;
+}
+void openweather_api_key_updater(u8 str[]) {
+  strncpy(openweather_api_key, (char*)str, MAX_API_KEY_LEN - 1);
+  openweather_api_key[MAX_API_KEY_LEN - 1] = '\0';
+}
+void openweather_api_key_printer(char* buffer, size_t buffer_size) {
+  snprintf(buffer, buffer_size, "OPENWEATHER_API_KEY=%s", openweather_api_key);
+}
+
+// WEATHER_CITY
+bool weather_city_validator(u8 str[]) {
+  return strlen((char*)str) < MAX_CITY_LEN;
+}
+void weather_city_updater(u8 str[]) {
+  strncpy(weather_city, (char*)str, MAX_CITY_LEN - 1);
+  weather_city[MAX_CITY_LEN - 1] = '\0';
+}
+void weather_city_printer(char* buffer, size_t buffer_size) {
+  snprintf(buffer, buffer_size, "WEATHER_CITY=%s", weather_city);
+}
+
+// WEATHER_COUNTRY
+bool weather_country_validator(u8 str[]) {
+  return strlen((char*)str) < MAX_COUNTRY_LEN;
+}
+void weather_country_updater(u8 str[]) {
+  strncpy(weather_country, (char*)str, MAX_COUNTRY_LEN - 1);
+  weather_country[MAX_COUNTRY_LEN - 1] = '\0';
+}
+void weather_country_printer(char* buffer, size_t buffer_size) {
+  snprintf(buffer, buffer_size, "WEATHER_COUNTRY=%s", weather_country);
+}
+
 static void config() {
   Disk.register_entry("WIFI_SSID", "", "#WiFi network name", &wifi_ssid_validator, &wifi_ssid_updater,
                       &wifi_ssid_printer);
@@ -131,6 +173,12 @@ static void config() {
                       &private_key_printer);
   Disk.register_entry("CALENDAR_URL", "", "#Google Calendar iCal URL", &calendar_url_validator, &calendar_url_updater,
                       &calendar_url_printer);
+  Disk.register_entry("OPENWEATHER_API_KEY", "", "#OpenWeather API key", &openweather_api_key_validator,
+                      &openweather_api_key_updater, &openweather_api_key_printer);
+  Disk.register_entry("WEATHER_CITY", "", "#Weather city name", &weather_city_validator, &weather_city_updater,
+                      &weather_city_printer);
+  Disk.register_entry("WEATHER_COUNTRY", "", "#Weather country code", &weather_country_validator,
+                      &weather_country_updater, &weather_country_printer);
   Disk.init();
 }
 
@@ -182,11 +230,9 @@ static void request_weather_cb(void) {
 }
 static void on_esp_weather_received(esp_weather_t* weather) {
   if (weather->valid) {
-    app_log_debug("Weather: %d°F, %s, humidity=%d%%", weather->temp_f, weather->condition, weather->humidity);
+    app_log_debug("Weather: %d°F, %s, humidity=%d%%, precip=%d%%", weather->temp_f, weather->condition, weather->humidity, weather->precip_chance);
     // Update FlipClockView with weather data
-    // Note: precip_chance not available from current API, passing 0
-    // The condition string (e.g. "Rain", "Cloudy") will trigger icon display
-    FlipClockView.set_weather(weather->temp_f, weather->condition, 0);
+    FlipClockView.set_weather(weather->temp_f, weather->condition, weather->precip_chance);
   } else {
     app_log_error("Unable to fetch weather!");
   }
@@ -216,6 +262,10 @@ static void init() {
   ESPComm.set_gcp_key(private_key);
   HAL_Delay(100);
   ESPComm.set_calendar_url(calendar_url);
+  HAL_Delay(100);
+  ESPComm.set_weather_api_key(openweather_api_key);
+  HAL_Delay(100);
+  ESPComm.set_weather_location(weather_city, weather_country);
   HAL_Delay(100);
   ESPComm.request_status(on_esp_status_received);
   HAL_Delay(100);

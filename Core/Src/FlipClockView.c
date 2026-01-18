@@ -249,57 +249,150 @@ static void draw_rain_icon(int x, int y, int size) {
   gdispFillCircle(x + half, y + half + 2, half, White);
 }
 
+// Draw snowflake icon
+static void draw_snow_icon(int x, int y, int size) {
+  int cx = x + size / 2;
+  int cy = y + size / 2;
+  int r = size / 2 - 1;
+  // Draw 6-pointed star (3 lines through center)
+  gdispDrawLine(cx, cy - r, cx, cy + r, White);  // vertical
+  gdispDrawLine(cx - r, cy - r/2, cx + r, cy + r/2, White);  // diagonal 1
+  gdispDrawLine(cx - r, cy + r/2, cx + r, cy - r/2, White);  // diagonal 2
+  // Small crossbars on each arm
+  int cb = r / 3;
+  gdispDrawLine(cx - cb, cy - r + cb, cx + cb, cy - r + cb, White);
+  gdispDrawLine(cx - cb, cy + r - cb, cx + cb, cy + r - cb, White);
+}
+
+// Draw sleet icon (rain + snow mix)
+static void draw_sleet_icon(int x, int y, int size) {
+  // Small raindrop on left
+  int half = size / 4;
+  int rx = x + 1;
+  int ry = y + size / 3;
+  for (int i = 0; i < half; i++) {
+    int width = (i * half) / (half > 0 ? half : 1);
+    if (width > 0) {
+      gdispDrawLine(rx + half - width, ry + i, rx + half + width, ry + i, White);
+    }
+  }
+  gdispFillCircle(rx + half, ry + half + 1, half, White);
+  // Small snowflake on right
+  int sx = x + size / 2 + 1;
+  int sy = y + 2;
+  int sr = size / 4;
+  gdispDrawLine(sx, sy, sx, sy + sr * 2, White);
+  gdispDrawLine(sx - sr, sy + sr/2, sx + sr, sy + sr + sr/2, White);
+  gdispDrawLine(sx - sr, sy + sr + sr/2, sx + sr, sy + sr/2, White);
+}
+
+// Draw degree symbol manually (small circle)
+static void draw_degree_symbol(int x, int y) {
+  gdispDrawCircle(x + 2, y + 3, 2, White);
+}
+
+// Determine precipitation type from condition string
+typedef enum {
+  PRECIP_NONE,
+  PRECIP_RAIN,
+  PRECIP_SNOW,
+  PRECIP_SLEET
+} precip_type_t;
+
+static precip_type_t get_precip_type(const char* condition) {
+  if (strstr(condition, "Sleet") != NULL || strstr(condition, "sleet") != NULL ||
+      strstr(condition, "Ice") != NULL || strstr(condition, "ice") != NULL ||
+      strstr(condition, "Freezing") != NULL || strstr(condition, "freezing") != NULL ||
+      strstr(condition, "Wintry") != NULL || strstr(condition, "wintry") != NULL) {
+    return PRECIP_SLEET;
+  }
+  if (strstr(condition, "Snow") != NULL || strstr(condition, "snow") != NULL ||
+      strstr(condition, "Flurr") != NULL || strstr(condition, "flurr") != NULL ||
+      strstr(condition, "Blizzard") != NULL || strstr(condition, "blizzard") != NULL) {
+    return PRECIP_SNOW;
+  }
+  if (strstr(condition, "Rain") != NULL || strstr(condition, "rain") != NULL ||
+      strstr(condition, "Drizzle") != NULL || strstr(condition, "drizzle") != NULL ||
+      strstr(condition, "Shower") != NULL || strstr(condition, "shower") != NULL ||
+      strstr(condition, "Thunder") != NULL || strstr(condition, "thunder") != NULL) {
+    return PRECIP_RAIN;
+  }
+  return PRECIP_NONE;
+}
+
 // Draw temperature section with thermometer, temp, forecast, precipitation
 static void draw_temp(void) {
   // Draw thermometer in bottom left
   draw_thermometer(8, TEMP_Y, 28);
 
+  font_t font = gdispOpenFont("DejaVuSans16");
+
   if (!weather_data.valid) {
     // Show placeholder when no data
-    font_t font = gdispOpenFont("DejaVuSans16");
-    gdispDrawString(30, TEMP_Y + 6, "--" "\xB0" "F", font, White);
+    gdispDrawString(30, TEMP_Y + 6, "--", font, White);
+    int dash_width = gdispGetStringWidth("--", font);
+    draw_degree_symbol(30 + dash_width, TEMP_Y + 6);
+    gdispDrawString(30 + dash_width + 8, TEMP_Y + 6, "F", font, White);
     gdispCloseFont(font);
     return;
   }
 
-  // Draw temperature with font
-  char temp_str[16];
-  snprintf(temp_str, sizeof(temp_str), "%d" "\xB0" "F", weather_data.temp_f);
-  font_t font = gdispOpenFont("DejaVuSans16");
-  gdispDrawString(30, TEMP_Y + 6, temp_str, font, White);
+  // Draw temperature value
+  char temp_val[8];
+  snprintf(temp_val, sizeof(temp_val), "%d", weather_data.temp_f);
+  gdispDrawString(30, TEMP_Y + 6, temp_val, font, White);
+  int temp_width = gdispGetStringWidth(temp_val, font);
+
+  // Draw degree symbol manually
+  draw_degree_symbol(30 + temp_width, TEMP_Y + 6);
+
+  // Draw F
+  gdispDrawString(30 + temp_width + 8, TEMP_Y + 6, "F", font, White);
+  int f_width = gdispGetStringWidth("F", font);
+  int total_temp_width = temp_width + 8 + f_width;
 
   // Draw condition/forecast (truncate if too long)
   char condition_short[12];
   strncpy(condition_short, weather_data.condition, sizeof(condition_short) - 1);
   condition_short[sizeof(condition_short) - 1] = '\0';
 
-  int temp_width = gdispGetStringWidth(temp_str, font);
-  gdispDrawString(30 + temp_width + 6, TEMP_Y + 6, condition_short, font, White);
+  gdispDrawString(30 + total_temp_width + 6, TEMP_Y + 6, condition_short, font, White);
 
-  gdispCloseFont(font);
-
-  // Draw precipitation if applicable
-  bool has_precip = weather_data.precip_chance > 0 ||
-                    strstr(weather_data.condition, "Rain") != NULL ||
-                    strstr(weather_data.condition, "rain") != NULL ||
-                    strstr(weather_data.condition, "Snow") != NULL ||
-                    strstr(weather_data.condition, "snow") != NULL ||
-                    strstr(weather_data.condition, "Drizzle") != NULL ||
-                    strstr(weather_data.condition, "Shower") != NULL;
+  // Determine precipitation type and whether to show icon
+  precip_type_t precip = get_precip_type(weather_data.condition);
+  bool has_precip = weather_data.precip_chance > 0 || precip != PRECIP_NONE;
 
   if (has_precip) {
-    // Draw rain icon and percentage in bottom right area
+    // Draw appropriate icon in bottom right area
     int precip_x = DISPLAY_WIDTH - 40;
-    draw_rain_icon(precip_x, TEMP_Y + 2, 12);
 
+    // Use detected precip type, or default to rain if only chance is set
+    if (precip == PRECIP_NONE) precip = PRECIP_RAIN;
+
+    switch (precip) {
+      case PRECIP_SNOW:
+        draw_snow_icon(precip_x, TEMP_Y + 2, 12);
+        break;
+      case PRECIP_SLEET:
+        draw_sleet_icon(precip_x, TEMP_Y + 2, 12);
+        break;
+      case PRECIP_RAIN:
+      default:
+        draw_rain_icon(precip_x, TEMP_Y + 2, 12);
+        break;
+    }
+
+    // Draw precipitation percentage
     if (weather_data.precip_chance > 0) {
       char precip_str[8];
       snprintf(precip_str, sizeof(precip_str), "%d%%", weather_data.precip_chance);
-      font_t precip_font = gdispOpenFont("fixed_5x8");
-      gdispDrawString(precip_x + 14, TEMP_Y + 10, precip_str, precip_font, White);
+      font_t precip_font = gdispOpenFont("DejaVuSans10");
+      gdispDrawString(precip_x + 14, TEMP_Y + 8, precip_str, precip_font, White);
       gdispCloseFont(precip_font);
     }
   }
+
+  gdispCloseFont(font);
 }
 
 static void render(void) {

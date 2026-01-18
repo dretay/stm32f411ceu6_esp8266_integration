@@ -230,14 +230,30 @@ static void esp_parse_time(const char* data) {
 static void esp_parse_weather(const char* data) {
   esp_weather_t weather = {0};
 
-  int temp_f, temp_c, humidity;
+  int temp_f, temp_c, humidity, precip_chance;
   char condition[32];
 
-  if (sscanf(data, "%d,%d,%31[^,],%d", &temp_f, &temp_c, condition, &humidity) == 4) {
+  // Try new format with precip_chance first
+  if (sscanf(data, "%d,%d,%31[^,],%d,%d", &temp_f, &temp_c, condition, &humidity, &precip_chance) == 5) {
     weather.temp_f = temp_f;
     strncpy(weather.condition, condition, sizeof(weather.condition) - 1);
     weather.condition[sizeof(weather.condition) - 1] = '\0';
     weather.humidity = humidity;
+    weather.precip_chance = (uint8_t)precip_chance;
+    weather.valid = true;
+
+    last_weather = weather;
+
+    if (weather_callback) {
+      weather_callback(&weather);
+    }
+  // Fall back to old format without precip_chance
+  } else if (sscanf(data, "%d,%d,%31[^,],%d", &temp_f, &temp_c, condition, &humidity) == 4) {
+    weather.temp_f = temp_f;
+    strncpy(weather.condition, condition, sizeof(weather.condition) - 1);
+    weather.condition[sizeof(weather.condition) - 1] = '\0';
+    weather.humidity = humidity;
+    weather.precip_chance = 0;
     weather.valid = true;
 
     last_weather = weather;
@@ -493,6 +509,24 @@ static bool set_calendar_url(const char* url) {
   return esp_queue_command(cmd);
 }
 
+static bool set_weather_api_key(const char* api_key) {
+  if (!api_key) {
+    return false;
+  }
+  char cmd[ESP_TX_BUFFER_SIZE];
+  snprintf(cmd, ESP_TX_BUFFER_SIZE, "SET_WEATHER_API_KEY:%s\n", api_key);
+  return esp_queue_command(cmd);
+}
+
+static bool set_weather_location(const char* city, const char* country) {
+  if (!city || !country) {
+    return false;
+  }
+  char cmd[ESP_TX_BUFFER_SIZE];
+  snprintf(cmd, ESP_TX_BUFFER_SIZE, "SET_WEATHER_LOCATION:%s,%s\n", city, country);
+  return esp_queue_command(cmd);
+}
+
 static bool request_time(esp_time_callback_t callback) {
   if (callback) {
     time_callback = callback;
@@ -603,6 +637,8 @@ const struct espcomm ESPComm = {
     .set_gcp_email = set_gcp_email,
     .set_gcp_key = set_gcp_key,
     .set_calendar_url = set_calendar_url,
+    .set_weather_api_key = set_weather_api_key,
+    .set_weather_location = set_weather_location,
     .request_time = request_time,
     .request_weather = request_weather,
     .request_stock = request_stock,
