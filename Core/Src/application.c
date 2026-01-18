@@ -117,26 +117,6 @@ void calendar_url_printer(char* buffer, size_t buffer_size) {
   snprintf(buffer, buffer_size, "CALENDAR_URL=%s", calendar_url);
 }
 
-// Getters for use by other modules
-const char* get_wifi_ssid(void) {
-  return wifi_ssid;
-}
-const char* get_wifi_password(void) {
-  return wifi_password;
-}
-const char* get_project_id(void) {
-  return project_id;
-}
-const char* get_client_email(void) {
-  return client_email;
-}
-const char* get_private_key(void) {
-  return private_key;
-}
-const char* get_calendar_url(void) {
-  return calendar_url;
-}
-
 static void config() {
   Disk.register_entry("WIFI_SSID", "", "#WiFi network name", &wifi_ssid_validator, &wifi_ssid_updater,
                       &wifi_ssid_printer);
@@ -154,18 +134,40 @@ static void config() {
 }
 
 static bool ESP_READY = false;
-// this is kinda awkward, but basically you need to wrap the callback so it can be properly invoked by the timer lib
+// this is kinda awkward, but basically you need to wrap the callbacks for all the async
+// functions so they can be properly invoked by the timer lib
 // since it needs to be able to pass it's own callback as well
 static void on_esp_status_received(esp_status_t* status);
 static void on_esp_status_received_cb(void) {
   ESPComm.request_status(on_esp_status_received);
 }
 static void on_esp_status_received(esp_status_t* status) {
-  uint32_t now = HAL_GetTick();
   if (!status->valid || !status->connected || status->gsheet_status != GSHEET_READY) {
     Timer.in(5000, on_esp_status_received_cb);
   } else {
     ESP_READY = true;
+  }
+  app_log_debug("ESP status: valid=%d connected=%d connecting=%d rssi=%d gsheet=%d ip=%s", status->valid,
+                status->connected, status->connecting, status->rssi, status->gsheet_status, status->ip_address);
+}
+static bool ESP_BALANCE_RECEIVED = false;
+static bool ESP_BALANCE_REQUESTED = false;
+static void on_esp_balance_received(esp_balance_t* balance) {
+  if (balance->valid) {
+    app_log_debug("Balance: %ld", (long)balance->balance);
+    ESP_BALANCE_RECEIVED = true;
+  } else {
+    app_log_error("Unable to fetch balance!");
+  }
+}
+static bool ESP_CALENDAR_RECEIVED = false;
+static bool ESP_CALENDAR_REQUESTED = false;
+static void on_esp_calendar_received(esp_calendar_t* cal) {
+  if (cal->valid) {
+    app_log_debug("Received %d calendar events", cal->event_count);
+    ESP_CALENDAR_RECEIVED = true;
+  } else {
+    app_log_error("Unable to fetch calendar!");
   }
 }
 static void init() {
@@ -174,23 +176,19 @@ static void init() {
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
   HAL_TIM_Base_Start_IT(&htim3);
 
-  // hold esp in reset
-  //  HAL_GPIO_WritePin(ESP_RST_GPIO_Port, ESP_RST_Pin, GPIO_PIN_RESET);
-
   gfxInit();
-  Timer.init();
   gdispGSetOrientation(gdispGetDisplay(0), GDISP_ROTATE_0);
+  clock_view = ClockView.init();
+
+  Timer.init();
 
   ESPComm.init(&huart2);
-
   ESPComm.set_wifi(wifi_ssid, wifi_password);
   ESPComm.set_gcp_project(project_id);
   ESPComm.set_gcp_email(client_email);
   ESPComm.set_gcp_key(private_key);
   ESPComm.set_calendar_url(calendar_url);
   ESPComm.request_status(on_esp_status_received);
-
-  clock_view = ClockView.init();
 
   //  DFPlayerMini.init();
   //  DFPlayerMini.volumeAdjustSet(30);
@@ -199,16 +197,7 @@ static void init() {
 
   views[0] = clock_view;
   VIEW_COUNT = MAX_VIEWS;
-
-  // wait a sec after serial comms enabled for things to settle before booting
-  // esp
-  //   SerialCommand.init();
-  app_log_debug("Wifi SSID: %s", get_wifi_ssid());
 }
-
-// Balance request state
-static bool balance_requested = false;
-static bool balance_logged = false;
 
 // TODO: a "settings" screen to control volume and brightness, persist in
 // eeprom, maybe alarm time?
@@ -218,8 +207,16 @@ static void run(void) {
   get_current_view()->render();
   ESPComm.process();
   Disk.process();
-  if (ESP_READY) {
-    app_log_debug("ESP IS READY!!!");
+  if (ESP_READY && (!ESP_BALANCE_RECEIVED || !ESP_CALENDAR_RECEIVED)) {
+    if (!ESP_BALANCE_REQUESTED && !ESP_BALANCE_RECEIVED) {
+      app_log_debug("Requesting balance");
+      ESPComm.request_balance(on_esp_balance_received);
+      ESP_BALANCE_REQUESTED = true;
+    } else if (ESP_BALANCE_RECEIVED && !ESP_CALENDAR_REQUESTED && !ESP_CALENDAR_RECEIVED) {
+      app_log_debug("Requesting calendar");
+      ESPComm.request_calendar(10, on_esp_calendar_received);
+      ESP_CALENDAR_REQUESTED = true;
+    }
   }
 
   // const esp_status_t* status = esp_comm_get_last_status();

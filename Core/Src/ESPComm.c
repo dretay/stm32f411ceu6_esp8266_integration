@@ -15,7 +15,7 @@ static uint8_t esp_rx_buffer[ESP_RX_BUFFER_SIZE];
 static uint16_t esp_rx_old_pos = 0;
 
 // Message parsing buffer
-#define ESP_MSG_BUFFER_SIZE 256
+#define ESP_MSG_BUFFER_SIZE 512
 static char esp_msg_buffer[ESP_MSG_BUFFER_SIZE];
 static bool esp_message_ready = false;
 

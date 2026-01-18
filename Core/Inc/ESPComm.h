@@ -2,6 +2,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "LOGGER.h"
 #include "stm32f4xx_hal.h"
 
 // Response data structures
