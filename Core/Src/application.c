@@ -1,10 +1,11 @@
 #include "application.h"
-#include "DateHelper.h"
 #include <stdio.h>
+#include "DateHelper.h"
 
 static View* clock_view;
 static View* flip_clock_view;
 static View* status_view;
+static View* alarm_view;
 static bool boot_complete = false;
 extern TIM_HandleTypeDef htim1;
 extern TIM_HandleTypeDef htim3;
@@ -244,9 +245,8 @@ static void on_esp_calendar_received(esp_calendar_t* cal) {
 
 static void on_esp_time_received(esp_time_t* time) {
   if (time->valid) {
-    app_log_debug("Time (UTC): %04d-%02d-%02d %02d:%02d:%02d",
-                  time->year, time->month, time->day,
-                  time->hour, time->minute, time->second);
+    app_log_debug("Time (UTC): %04d-%02d-%02d %02d:%02d:%02d", time->year, time->month, time->day, time->hour,
+                  time->minute, time->second);
 
     // Determine timezone offset based on DST
     bool dst = DateHelper.is_dst_us_eastern(time->year, time->month, time->day, time->hour);
@@ -295,9 +295,8 @@ static void on_esp_time_received(esp_time_t* time) {
       }
     }
 
-    app_log_debug("Time (Local): %04d-%02d-%02d %02d:%02d:%02d",
-                  local_year, local_month, local_day,
-                  local_hour, time->minute, time->second);
+    app_log_debug("Time (Local): %04d-%02d-%02d %02d:%02d:%02d", local_year, local_month, local_day, local_hour,
+                  time->minute, time->second);
 
     // Set the RTC with the received time
     RTC_TimeTypeDef sTime = {0};
@@ -336,12 +335,14 @@ static void on_esp_time_received(esp_time_t* time) {
     int y = local_year;
     int m = local_month;
     int d = local_day;
-    if (m < 3) { m += 12; y--; }
+    if (m < 3) {
+      m += 12;
+      y--;
+    }
     int dow = (d + (13 * (m + 1)) / 5 + y + y / 4 - y / 100 + y / 400) % 7;
     // Convert from Zeller (0=Sat, 1=Sun, ..., 6=Fri) to RTC (1=Mon, ..., 7=Sun)
-    static const uint8_t zeller_to_rtc[] = {RTC_WEEKDAY_SATURDAY, RTC_WEEKDAY_SUNDAY,
-                                            RTC_WEEKDAY_MONDAY, RTC_WEEKDAY_TUESDAY,
-                                            RTC_WEEKDAY_WEDNESDAY, RTC_WEEKDAY_THURSDAY,
+    static const uint8_t zeller_to_rtc[] = {RTC_WEEKDAY_SATURDAY, RTC_WEEKDAY_SUNDAY,    RTC_WEEKDAY_MONDAY,
+                                            RTC_WEEKDAY_TUESDAY,  RTC_WEEKDAY_WEDNESDAY, RTC_WEEKDAY_THURSDAY,
                                             RTC_WEEKDAY_FRIDAY};
     sDate.WeekDay = zeller_to_rtc[dow];
 
@@ -370,7 +371,8 @@ static void request_weather_and_time_cb(void) {
 }
 static void on_esp_weather_received(esp_weather_t* weather) {
   if (weather->valid) {
-    app_log_debug("Weather: %d°F, %s, humidity=%d%%, precip=%d%%", weather->temp_f, weather->condition, weather->humidity, weather->precip_chance);
+    app_log_debug("Weather: %d°F, %s, humidity=%d%%, precip=%d%%", weather->temp_f, weather->condition,
+                  weather->humidity, weather->precip_chance);
     // Update FlipClockView with weather data
     FlipClockView.set_weather(weather->temp_f, weather->condition, weather->precip_chance);
     // Weather received, mark complete and start balance phase
@@ -398,6 +400,7 @@ static void init() {
   clock_view = ClockView.init();
   flip_clock_view = FlipClockView.init();
   status_view = StatusView.init();
+  alarm_view = AlarmView.init();
 
   Timer.init();
 
@@ -435,6 +438,7 @@ static void init() {
 // TODO: a "settings" screen to control volume and brightness, persist in
 // eeprom, maybe alarm time?
 static void run(void) {
+  // alarm_view->render();
   // Show status view during boot, then switch to flip clock
   if (boot_complete) {
     flip_clock_view->render();

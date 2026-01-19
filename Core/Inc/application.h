@@ -6,6 +6,7 @@
 #include "stm32f4xx_hal.h"
 #endif
 
+#include "AlarmView.h"
 #include "ClockView.h"
 #include "FlipClockView.h"
 #include "StatusView.h"
