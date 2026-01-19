@@ -79,9 +79,66 @@ static void to_string(char* buffer) {
   snprintf(buffer, 20, "%d:%02d %s", showHours, currentTime.Minutes, currentTime.Hours >= 12 ? "PM" : "AM");
 }
 
+// Calculate day of week (0=Sunday, 1=Monday, ..., 6=Saturday)
+static uint8_t calc_day_of_week(uint16_t year, uint8_t month, uint8_t day) {
+  int y = year;
+  int m = month;
+  int d = day;
+  if (m < 3) { m += 12; y--; }
+  int dow = (d + (13 * (m + 1)) / 5 + y + y / 4 - y / 100 + y / 400) % 7;
+  // Convert from Zeller (0=Sat, 1=Sun, ..., 6=Fri) to (0=Sun, 1=Mon, ..., 6=Sat)
+  return (dow + 6) % 7;
+}
+
+// Find the nth occurrence of a weekday in a given month (1-based)
+// weekday: 0=Sunday, n: 1=first, 2=second, etc.
+static uint8_t nth_weekday_of_month(uint16_t year, uint8_t month, uint8_t weekday, uint8_t n) {
+  uint8_t first_dow = calc_day_of_week(year, month, 1);
+  uint8_t first_occurrence = 1 + ((7 + weekday - first_dow) % 7);
+  return first_occurrence + (n - 1) * 7;
+}
+
+// Check if DST is in effect for US Eastern timezone
+// Input is UTC time, returns true if EDT (-4), false if EST (-5)
+static bool is_dst_us_eastern(uint16_t year, uint8_t month, uint8_t day, uint8_t hour) {
+  // DST starts: 2nd Sunday of March at 2:00 AM local (7:00 AM UTC)
+  // DST ends: 1st Sunday of November at 2:00 AM local (6:00 AM UTC)
+
+  uint8_t dst_start_day = nth_weekday_of_month(year, 3, 0, 2);  // 2nd Sunday of March
+  uint8_t dst_end_day = nth_weekday_of_month(year, 11, 0, 1);   // 1st Sunday of November
+
+  // Before March - not DST
+  if (month < 3) return false;
+  // After November - not DST
+  if (month > 11) return false;
+  // April through October - DST
+  if (month > 3 && month < 11) return true;
+
+  // March - check if we're past the transition
+  if (month == 3) {
+    if (day > dst_start_day) return true;
+    if (day < dst_start_day) return false;
+    // On the transition day, DST starts at 7:00 UTC (2:00 AM EST becomes 3:00 AM EDT)
+    return hour >= 7;
+  }
+
+  // November - check if we're before the transition
+  if (month == 11) {
+    if (day < dst_end_day) return true;
+    if (day > dst_end_day) return false;
+    // On the transition day, DST ends at 6:00 UTC (2:00 AM EDT becomes 1:00 AM EST)
+    return hour < 6;
+  }
+
+  return false;
+}
+
 const struct datehelper DateHelper = {.get_epoch = get_epoch,
                                       .get_day_of_week = get_day_of_week,
                                       .get_month = get_month,
                                       .get_year = get_year,
                                       .to_string = to_string,
-                                      .minutes_since_midnight = minutes_since_midnight};
+                                      .minutes_since_midnight = minutes_since_midnight,
+                                      .calc_day_of_week = calc_day_of_week,
+                                      .nth_weekday_of_month = nth_weekday_of_month,
+                                      .is_dst_us_eastern = is_dst_us_eastern};

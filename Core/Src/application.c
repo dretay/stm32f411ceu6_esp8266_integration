@@ -1,8 +1,11 @@
 #include "application.h"
+#include "DateHelper.h"
 #include <stdio.h>
 
 static View* clock_view;
 static View* flip_clock_view;
+static View* status_view;
+static bool boot_complete = false;
 extern TIM_HandleTypeDef htim1;
 extern TIM_HandleTypeDef htim3;
 extern SPI_HandleTypeDef hspi2;
@@ -187,8 +190,12 @@ static bool ESP_READY = false;
 // this is kinda awkward, but basically you need to wrap the callbacks for all the async
 // functions so they can be properly invoked by the timer lib
 // since it needs to be able to pass it's own callback as well
+static void on_esp_time_received(esp_time_t* time);
 static void on_esp_weather_received(esp_weather_t* weather);
+static void on_esp_balance_received(esp_balance_t* balance);
+static void on_esp_calendar_received(esp_calendar_t* cal);
 static void on_esp_status_received(esp_status_t* status);
+static void request_weather_and_time_cb(void);
 static void on_esp_status_received_cb(void) {
   ESPComm.request_status(on_esp_status_received);
 }
@@ -197,88 +204,42 @@ static void on_esp_status_received(esp_status_t* status) {
     Timer.in(5000, on_esp_status_received_cb);
   } else {
     ESP_READY = true;
-    // Request weather data now that ESP is ready
-    ESPComm.request_weather(on_esp_weather_received);
+    // WiFi connected, mark complete and start time phase
+    StatusView.set_wifi_state(BOOT_PHASE_COMPLETE);
+    StatusView.set_time_state(BOOT_PHASE_IN_PROGRESS);
+    // Request time first, then weather (to match boot status display order)
+    ESPComm.request_time(on_esp_time_received);
   }
   app_log_debug("ESP status: valid=%d connected=%d connecting=%d rssi=%d gsheet=%d ip=%s", status->valid,
                 status->connected, status->connecting, status->rssi, status->gsheet_status, status->ip_address);
 }
-static bool ESP_BALANCE_RECEIVED = false;
-static bool ESP_BALANCE_REQUESTED = false;
 static void on_esp_balance_received(esp_balance_t* balance) {
   if (balance->valid) {
     app_log_debug("Balance: %ld", (long)balance->balance);
-    ESP_BALANCE_RECEIVED = true;
   } else {
     app_log_error("Unable to fetch balance!");
   }
+  // Balance phase complete, start calendar phase
+  if (!boot_complete) {
+    StatusView.set_balance_state(BOOT_PHASE_COMPLETE);
+    StatusView.set_calendar_state(BOOT_PHASE_IN_PROGRESS);
+    ESPComm.request_calendar(10, on_esp_calendar_received);
+  }
 }
-static bool ESP_CALENDAR_RECEIVED = false;
-static bool ESP_CALENDAR_REQUESTED = false;
 static void on_esp_calendar_received(esp_calendar_t* cal) {
   if (cal->valid) {
     app_log_debug("Received %d calendar events", cal->event_count);
-    ESP_CALENDAR_RECEIVED = true;
   } else {
     app_log_error("Unable to fetch calendar!");
   }
-}
-
-// Time handling - US Eastern timezone with automatic DST
-// DST runs from 2nd Sunday of March to 1st Sunday of November
-
-// Calculate day of week (0=Sunday, 1=Monday, ..., 6=Saturday)
-static uint8_t day_of_week(uint16_t year, uint8_t month, uint8_t day) {
-  int y = year;
-  int m = month;
-  int d = day;
-  if (m < 3) { m += 12; y--; }
-  int dow = (d + (13 * (m + 1)) / 5 + y + y / 4 - y / 100 + y / 400) % 7;
-  // Convert from Zeller (0=Sat, 1=Sun, ..., 6=Fri) to (0=Sun, 1=Mon, ..., 6=Sat)
-  return (dow + 6) % 7;
-}
-
-// Find the nth occurrence of a weekday in a given month (1-based)
-// weekday: 0=Sunday, n: 1=first, 2=second, etc.
-static uint8_t nth_weekday_of_month(uint16_t year, uint8_t month, uint8_t weekday, uint8_t n) {
-  uint8_t first_dow = day_of_week(year, month, 1);
-  uint8_t first_occurrence = 1 + ((7 + weekday - first_dow) % 7);
-  return first_occurrence + (n - 1) * 7;
-}
-
-// Check if DST is in effect for US Eastern timezone
-// Input is UTC time, returns true if EDT (-4), false if EST (-5)
-static bool is_dst_us_eastern(uint16_t year, uint8_t month, uint8_t day, uint8_t hour) {
-  // DST starts: 2nd Sunday of March at 2:00 AM local (7:00 AM UTC)
-  // DST ends: 1st Sunday of November at 2:00 AM local (6:00 AM UTC)
-
-  uint8_t dst_start_day = nth_weekday_of_month(year, 3, 0, 2);  // 2nd Sunday of March
-  uint8_t dst_end_day = nth_weekday_of_month(year, 11, 0, 1);   // 1st Sunday of November
-
-  // Before March - not DST
-  if (month < 3) return false;
-  // After November - not DST
-  if (month > 11) return false;
-  // April through October - DST
-  if (month > 3 && month < 11) return true;
-
-  // March - check if we're past the transition
-  if (month == 3) {
-    if (day > dst_start_day) return true;
-    if (day < dst_start_day) return false;
-    // On the transition day, DST starts at 7:00 UTC (2:00 AM EST becomes 3:00 AM EDT)
-    return hour >= 7;
+  // Calendar phase complete, boot is done
+  if (!boot_complete) {
+    StatusView.set_calendar_state(BOOT_PHASE_COMPLETE);
+    boot_complete = true;
+    app_log_debug("Boot complete, switching to flip clock view");
+    // Start periodic weather/time refresh
+    Timer.in(600000, request_weather_and_time_cb);
   }
-
-  // November - check if we're before the transition
-  if (month == 11) {
-    if (day < dst_end_day) return true;
-    if (day > dst_end_day) return false;
-    // On the transition day, DST ends at 6:00 UTC (2:00 AM EDT becomes 1:00 AM EST)
-    return hour < 6;
-  }
-
-  return false;
 }
 
 static void on_esp_time_received(esp_time_t* time) {
@@ -288,7 +249,7 @@ static void on_esp_time_received(esp_time_t* time) {
                   time->hour, time->minute, time->second);
 
     // Determine timezone offset based on DST
-    bool dst = is_dst_us_eastern(time->year, time->month, time->day, time->hour);
+    bool dst = DateHelper.is_dst_us_eastern(time->year, time->month, time->day, time->hour);
     int8_t tz_offset = dst ? -4 : -5;  // EDT = -4, EST = -5
     app_log_debug("DST: %s, offset: %d", dst ? "yes" : "no", tz_offset);
 
@@ -389,6 +350,13 @@ static void on_esp_time_received(esp_time_t* time) {
     }
 
     app_log_debug("RTC set successfully");
+    // Time received, mark complete and start weather phase
+    if (!boot_complete) {
+      StatusView.set_time_state(BOOT_PHASE_COMPLETE);
+      StatusView.set_weather_state(BOOT_PHASE_IN_PROGRESS);
+    }
+    // Always request weather after time sync
+    ESPComm.request_weather(on_esp_weather_received);
   } else {
     app_log_error("Unable to fetch time!");
   }
@@ -396,21 +364,28 @@ static void on_esp_time_received(esp_time_t* time) {
 
 // Weather handling
 static void on_esp_weather_received(esp_weather_t* weather);
-static void request_weather_cb(void) {
-  ESPComm.request_weather(on_esp_weather_received);
+static void request_weather_and_time_cb(void) {
+  // Request time first, then weather callback will be triggered after time
+  ESPComm.request_time(on_esp_time_received);
 }
 static void on_esp_weather_received(esp_weather_t* weather) {
   if (weather->valid) {
     app_log_debug("Weather: %d°F, %s, humidity=%d%%, precip=%d%%", weather->temp_f, weather->condition, weather->humidity, weather->precip_chance);
     // Update FlipClockView with weather data
     FlipClockView.set_weather(weather->temp_f, weather->condition, weather->precip_chance);
-    // Request time from ESP8266 to sync the RTC
-    ESPComm.request_time(on_esp_time_received);
+    // Weather received, mark complete and start balance phase
+    if (!boot_complete) {
+      StatusView.set_weather_state(BOOT_PHASE_COMPLETE);
+      StatusView.set_balance_state(BOOT_PHASE_IN_PROGRESS);
+      ESPComm.request_balance(on_esp_balance_received);
+    }
   } else {
     app_log_error("Unable to fetch weather!");
   }
-  // Request weather again in 10 minutes
-  Timer.in(600000, request_weather_cb);
+  // Request weather again in 10 minutes (also re-syncs time)
+  if (boot_complete) {
+    Timer.in(600000, request_weather_and_time_cb);
+  }
 }
 static void init() {
   app_log_debug("Application init");
@@ -422,8 +397,12 @@ static void init() {
   gdispGSetOrientation(gdispGetDisplay(0), GDISP_ROTATE_0);
   clock_view = ClockView.init();
   flip_clock_view = FlipClockView.init();
+  status_view = StatusView.init();
 
   Timer.init();
+
+  // Show status view and start wifi connection phase
+  StatusView.set_wifi_state(BOOT_PHASE_IN_PROGRESS);
 
   ESPComm.init(&huart2);
   ESPComm.set_wifi(wifi_ssid, wifi_password);
@@ -440,6 +419,7 @@ static void init() {
   HAL_Delay(100);
   ESPComm.set_weather_location(weather_city, weather_country);
   HAL_Delay(100);
+
   ESPComm.request_status(on_esp_status_received);
   HAL_Delay(100);
 
@@ -455,9 +435,12 @@ static void init() {
 // TODO: a "settings" screen to control volume and brightness, persist in
 // eeprom, maybe alarm time?
 static void run(void) {
-  //  bank_view->render();
-  // get_current_view()->render();
-  flip_clock_view->render();
+  // Show status view during boot, then switch to flip clock
+  if (boot_complete) {
+    flip_clock_view->render();
+  } else {
+    status_view->render();
+  }
   ESPComm.process();
   Disk.process();
   // if (ESP_READY && (!ESP_BALANCE_RECEIVED || !ESP_CALENDAR_RECEIVED)) {

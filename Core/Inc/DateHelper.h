@@ -1,6 +1,8 @@
 #pragma once
 
 #include "time.h"
+#include <stdbool.h>
+#include <stdint.h>
 #if defined(STM32F103xB)
 #include "stm32f1xx_hal.h"
 #elif defined(STM32F411xE)
@@ -15,5 +17,8 @@ struct datehelper {
   int (*get_year)();
   void (*to_string)(char* buffer);
   int (*minutes_since_midnight)(void);
+  uint8_t (*calc_day_of_week)(uint16_t year, uint8_t month, uint8_t day);
+  uint8_t (*nth_weekday_of_month)(uint16_t year, uint8_t month, uint8_t weekday, uint8_t n);
+  bool (*is_dst_us_eastern)(uint16_t year, uint8_t month, uint8_t day, uint8_t hour);
 };
 extern const struct datehelper DateHelper;

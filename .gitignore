@@ -49,3 +49,4 @@ output.xml
 
 # Claude Code
 .claude/
+.cache/
