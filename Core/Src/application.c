@@ -7,6 +7,7 @@ extern TIM_HandleTypeDef htim1;
 extern TIM_HandleTypeDef htim3;
 extern SPI_HandleTypeDef hspi2;
 extern UART_HandleTypeDef huart2;
+extern RTC_HandleTypeDef hrtc;
 #define DATA_SIZE 32
 uint8_t RX_Data[DATA_SIZE] = {0};
 
@@ -223,6 +224,176 @@ static void on_esp_calendar_received(esp_calendar_t* cal) {
   }
 }
 
+// Time handling - US Eastern timezone with automatic DST
+// DST runs from 2nd Sunday of March to 1st Sunday of November
+
+// Calculate day of week (0=Sunday, 1=Monday, ..., 6=Saturday)
+static uint8_t day_of_week(uint16_t year, uint8_t month, uint8_t day) {
+  int y = year;
+  int m = month;
+  int d = day;
+  if (m < 3) { m += 12; y--; }
+  int dow = (d + (13 * (m + 1)) / 5 + y + y / 4 - y / 100 + y / 400) % 7;
+  // Convert from Zeller (0=Sat, 1=Sun, ..., 6=Fri) to (0=Sun, 1=Mon, ..., 6=Sat)
+  return (dow + 6) % 7;
+}
+
+// Find the nth occurrence of a weekday in a given month (1-based)
+// weekday: 0=Sunday, n: 1=first, 2=second, etc.
+static uint8_t nth_weekday_of_month(uint16_t year, uint8_t month, uint8_t weekday, uint8_t n) {
+  uint8_t first_dow = day_of_week(year, month, 1);
+  uint8_t first_occurrence = 1 + ((7 + weekday - first_dow) % 7);
+  return first_occurrence + (n - 1) * 7;
+}
+
+// Check if DST is in effect for US Eastern timezone
+// Input is UTC time, returns true if EDT (-4), false if EST (-5)
+static bool is_dst_us_eastern(uint16_t year, uint8_t month, uint8_t day, uint8_t hour) {
+  // DST starts: 2nd Sunday of March at 2:00 AM local (7:00 AM UTC)
+  // DST ends: 1st Sunday of November at 2:00 AM local (6:00 AM UTC)
+
+  uint8_t dst_start_day = nth_weekday_of_month(year, 3, 0, 2);  // 2nd Sunday of March
+  uint8_t dst_end_day = nth_weekday_of_month(year, 11, 0, 1);   // 1st Sunday of November
+
+  // Before March - not DST
+  if (month < 3) return false;
+  // After November - not DST
+  if (month > 11) return false;
+  // April through October - DST
+  if (month > 3 && month < 11) return true;
+
+  // March - check if we're past the transition
+  if (month == 3) {
+    if (day > dst_start_day) return true;
+    if (day < dst_start_day) return false;
+    // On the transition day, DST starts at 7:00 UTC (2:00 AM EST becomes 3:00 AM EDT)
+    return hour >= 7;
+  }
+
+  // November - check if we're before the transition
+  if (month == 11) {
+    if (day < dst_end_day) return true;
+    if (day > dst_end_day) return false;
+    // On the transition day, DST ends at 6:00 UTC (2:00 AM EDT becomes 1:00 AM EST)
+    return hour < 6;
+  }
+
+  return false;
+}
+
+static void on_esp_time_received(esp_time_t* time) {
+  if (time->valid) {
+    app_log_debug("Time (UTC): %04d-%02d-%02d %02d:%02d:%02d",
+                  time->year, time->month, time->day,
+                  time->hour, time->minute, time->second);
+
+    // Determine timezone offset based on DST
+    bool dst = is_dst_us_eastern(time->year, time->month, time->day, time->hour);
+    int8_t tz_offset = dst ? -4 : -5;  // EDT = -4, EST = -5
+    app_log_debug("DST: %s, offset: %d", dst ? "yes" : "no", tz_offset);
+
+    // Apply timezone offset
+    int16_t local_hour = time->hour + tz_offset;
+    uint8_t local_day = time->day;
+    uint8_t local_month = time->month;
+    uint16_t local_year = time->year;
+
+    // Handle day rollover
+    if (local_hour < 0) {
+      local_hour += 24;
+      local_day--;
+      if (local_day == 0) {
+        local_month--;
+        if (local_month == 0) {
+          local_month = 12;
+          local_year--;
+        }
+        // Days in each month (index 0 unused, 1=Jan, etc.)
+        static const uint8_t days_in_month[] = {0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+        local_day = days_in_month[local_month];
+        // Leap year check for February
+        if (local_month == 2 && ((local_year % 4 == 0 && local_year % 100 != 0) || (local_year % 400 == 0))) {
+          local_day = 29;
+        }
+      }
+    } else if (local_hour >= 24) {
+      local_hour -= 24;
+      local_day++;
+      static const uint8_t days_in_month[] = {0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+      uint8_t max_day = days_in_month[local_month];
+      if (local_month == 2 && ((local_year % 4 == 0 && local_year % 100 != 0) || (local_year % 400 == 0))) {
+        max_day = 29;
+      }
+      if (local_day > max_day) {
+        local_day = 1;
+        local_month++;
+        if (local_month > 12) {
+          local_month = 1;
+          local_year++;
+        }
+      }
+    }
+
+    app_log_debug("Time (Local): %04d-%02d-%02d %02d:%02d:%02d",
+                  local_year, local_month, local_day,
+                  local_hour, time->minute, time->second);
+
+    // Set the RTC with the received time
+    RTC_TimeTypeDef sTime = {0};
+    RTC_DateTypeDef sDate = {0};
+
+    // Convert 24-hour to 12-hour format (RTC is configured in 12-hour mode)
+    uint8_t hour24 = (uint8_t)local_hour;
+    if (hour24 == 0) {
+      sTime.Hours = 12;
+      sTime.TimeFormat = RTC_HOURFORMAT12_AM;
+    } else if (hour24 < 12) {
+      sTime.Hours = hour24;
+      sTime.TimeFormat = RTC_HOURFORMAT12_AM;
+    } else if (hour24 == 12) {
+      sTime.Hours = 12;
+      sTime.TimeFormat = RTC_HOURFORMAT12_PM;
+    } else {
+      sTime.Hours = hour24 - 12;
+      sTime.TimeFormat = RTC_HOURFORMAT12_PM;
+    }
+    sTime.Minutes = time->minute;
+    sTime.Seconds = time->second;
+    sTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
+    sTime.StoreOperation = RTC_STOREOPERATION_RESET;
+
+    if (HAL_RTC_SetTime(&hrtc, &sTime, RTC_FORMAT_BIN) != HAL_OK) {
+      app_log_error("Failed to set RTC time!");
+    }
+
+    // Set date
+    sDate.Year = local_year - 2000;  // RTC year is offset from 2000
+    sDate.Month = local_month;
+    sDate.Date = local_day;
+    // Calculate day of week (Zeller's formula simplified)
+    // WeekDay: 1=Monday, 7=Sunday for RTC
+    int y = local_year;
+    int m = local_month;
+    int d = local_day;
+    if (m < 3) { m += 12; y--; }
+    int dow = (d + (13 * (m + 1)) / 5 + y + y / 4 - y / 100 + y / 400) % 7;
+    // Convert from Zeller (0=Sat, 1=Sun, ..., 6=Fri) to RTC (1=Mon, ..., 7=Sun)
+    static const uint8_t zeller_to_rtc[] = {RTC_WEEKDAY_SATURDAY, RTC_WEEKDAY_SUNDAY,
+                                            RTC_WEEKDAY_MONDAY, RTC_WEEKDAY_TUESDAY,
+                                            RTC_WEEKDAY_WEDNESDAY, RTC_WEEKDAY_THURSDAY,
+                                            RTC_WEEKDAY_FRIDAY};
+    sDate.WeekDay = zeller_to_rtc[dow];
+
+    if (HAL_RTC_SetDate(&hrtc, &sDate, RTC_FORMAT_BIN) != HAL_OK) {
+      app_log_error("Failed to set RTC date!");
+    }
+
+    app_log_debug("RTC set successfully");
+  } else {
+    app_log_error("Unable to fetch time!");
+  }
+}
+
 // Weather handling
 static void on_esp_weather_received(esp_weather_t* weather);
 static void request_weather_cb(void) {
@@ -233,6 +404,8 @@ static void on_esp_weather_received(esp_weather_t* weather) {
     app_log_debug("Weather: %d°F, %s, humidity=%d%%, precip=%d%%", weather->temp_f, weather->condition, weather->humidity, weather->precip_chance);
     // Update FlipClockView with weather data
     FlipClockView.set_weather(weather->temp_f, weather->condition, weather->precip_chance);
+    // Request time from ESP8266 to sync the RTC
+    ESPComm.request_time(on_esp_time_received);
   } else {
     app_log_error("Unable to fetch weather!");
   }

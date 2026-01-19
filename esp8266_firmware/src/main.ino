@@ -38,7 +38,7 @@ char weatherCountry[MAX_WEATHER_COUNTRY_LEN + 1] = "US";
 const char* STOCK_API_KEY = "your_api_key_here";
 
 // NTP Configuration
-const long UTC_OFFSET_SEC = -8 * 3600;  // PST = UTC-8
+const long UTC_OFFSET_SEC = 0;  // Return UTC, STM32 handles timezone conversion
 const int NTP_UPDATE_INTERVAL = 60000;
 
 // ============================================================================

@@ -1,35 +1,36 @@
 #include "FlipClockView.h"
-#include "DateHelper.h"
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
-#include <stdbool.h>
+#include "DateHelper.h"
 
 static View view;
 
 // Display dimensions
-#define DISPLAY_WIDTH  160
+#define DISPLAY_WIDTH 160
 #define DISPLAY_HEIGHT 160
 
 // Large digit dimensions (for time)
-#define DIGIT_WIDTH    38
-#define DIGIT_HEIGHT   92
-#define SEGMENT_THICK  10
-#define DIGIT_SPACING  4
+#define DIGIT_WIDTH 38
+#define DIGIT_WIDTH_ONE 18  // Narrower width for "1" (only right segments)
+#define DIGIT_HEIGHT 92
+#define SEGMENT_THICK 10
+#define DIGIT_SPACING 4
 
 // Medium digit dimensions (for day/date)
-#define MED_DIGIT_WIDTH   16
-#define MED_DIGIT_HEIGHT  24
+#define MED_DIGIT_WIDTH 16
+#define MED_DIGIT_HEIGHT 24
 #define MED_SEGMENT_THICK 3
 #define MED_DIGIT_SPACING 2
 
 // Layout Y positions
-#define TIME_Y         2
-#define LINE1_Y        98
-#define DATE_LABEL_Y   102
-#define DATE_Y         112
-#define LINE2_Y        138
-#define TEMP_LABEL_Y   140
-#define TEMP_Y         144
+#define TIME_Y 2
+#define LINE1_Y 98
+#define DATE_LABEL_Y 102
+#define DATE_Y 112
+#define LINE2_Y 138
+#define TEMP_LABEL_Y 140
+#define TEMP_Y 144
 
 // Weather state
 static flipclock_weather_t weather_data = {0};
@@ -42,22 +43,22 @@ static struct {
 // Segment patterns for digits 0-9
 // Bit order: 6=a(top), 5=b(upper-right), 4=c(lower-right), 3=d(bottom), 2=e(lower-left), 1=f(upper-left), 0=g(middle)
 static const unsigned char digit_segments[10] = {
-  0x7E, // 0: a,b,c,d,e,f
-  0x30, // 1: b,c
-  0x6D, // 2: a,b,d,e,g
-  0x79, // 3: a,b,c,d,g
-  0x33, // 4: b,c,f,g
-  0x5B, // 5: a,c,d,f,g
-  0x5F, // 6: a,c,d,e,f,g
-  0x70, // 7: a,b,c
-  0x7F, // 8: all
-  0x7B  // 9: a,b,c,d,f,g
+    0x7E,  // 0: a,b,c,d,e,f
+    0x30,  // 1: b,c
+    0x6D,  // 2: a,b,d,e,g
+    0x79,  // 3: a,b,c,d,g
+    0x33,  // 4: b,c,f,g
+    0x5B,  // 5: a,c,d,f,g
+    0x5F,  // 6: a,c,d,e,f,g
+    0x70,  // 7: a,b,c
+    0x7F,  // 8: all
+    0x7B   // 9: a,b,c,d,f,g
 };
 
 // Draw a horizontal segment
 static void draw_h_segment(int x, int y, int width, int thick) {
   for (int i = 0; i < thick; i++) {
-    int inset = (i < thick/2) ? (thick/2 - i) : (i - thick/2);
+    int inset = (i < thick / 2) ? (thick / 2 - i) : (i - thick / 2);
     gdispDrawLine(x + inset + 1, y + i, x + width - inset - 2, y + i, White);
   }
 }
@@ -66,24 +67,32 @@ static void draw_h_segment(int x, int y, int width, int thick) {
 static void draw_v_segment(int x, int y, int height, int thick) {
   for (int i = 0; i < thick; i++) {
     int x_off = x + i;
-    int taper = (i < thick/2) ? (thick/2 - i) : (i - thick/2);
+    int taper = (i < thick / 2) ? (thick / 2 - i) : (i - thick / 2);
     gdispDrawLine(x_off, y + taper + 1, x_off, y + height - taper - 2, White);
   }
 }
 
 // Draw a digit with configurable size
 static void draw_digit_sized(int x, int y, int digit, int w, int h, int t) {
-  if (digit < 0 || digit > 9) return;
+  if (digit < 0 || digit > 9)
+    return;
   unsigned char segs = digit_segments[digit];
   int half_h = h / 2;
 
-  if (segs & 0x40) draw_h_segment(x + t/2, y, w - t, t);                    // a - top
-  if (segs & 0x20) draw_v_segment(x + w - t, y + t/2, half_h - t/2, t);     // b - upper right
-  if (segs & 0x10) draw_v_segment(x + w - t, y + half_h, half_h - t/2, t);  // c - lower right
-  if (segs & 0x08) draw_h_segment(x + t/2, y + h - t, w - t, t);            // d - bottom
-  if (segs & 0x04) draw_v_segment(x, y + half_h, half_h - t/2, t);          // e - lower left
-  if (segs & 0x02) draw_v_segment(x, y + t/2, half_h - t/2, t);             // f - upper left
-  if (segs & 0x01) draw_h_segment(x + t/2, y + half_h - t/2, w - t, t);     // g - middle
+  if (segs & 0x40)
+    draw_h_segment(x + t / 2, y, w - t, t);  // a - top
+  if (segs & 0x20)
+    draw_v_segment(x + w - t, y + t / 2, half_h - t / 2, t);  // b - upper right
+  if (segs & 0x10)
+    draw_v_segment(x + w - t, y + half_h, half_h - t / 2, t);  // c - lower right
+  if (segs & 0x08)
+    draw_h_segment(x + t / 2, y + h - t, w - t, t);  // d - bottom
+  if (segs & 0x04)
+    draw_v_segment(x, y + half_h, half_h - t / 2, t);  // e - lower left
+  if (segs & 0x02)
+    draw_v_segment(x, y + t / 2, half_h - t / 2, t);  // f - upper left
+  if (segs & 0x01)
+    draw_h_segment(x + t / 2, y + half_h - t / 2, w - t, t);  // g - middle
 }
 
 // Draw large digit for time
@@ -103,8 +112,8 @@ static void draw_colon(int x, int y, int height, int seconds) {
     int dot_r = 3;
     int spacing = height / 4;
     // Center dots within the colon width (8 pixels)
-    gdispFillCircle(x + 4, y + height/2 - spacing, dot_r, White);
-    gdispFillCircle(x + 4, y + height/2 + spacing, dot_r, White);
+    gdispFillCircle(x + 4, y + height / 2 - spacing, dot_r, White);
+    gdispFillCircle(x + 4, y + height / 2 + spacing, dot_r, White);
   }
 }
 
@@ -113,30 +122,11 @@ static void draw_separator(int y) {
   gdispDrawLine(8, y, DISPLAY_WIDTH - 8, y, White);
 }
 
-// Draw thermometer icon
-static void draw_thermometer(int x, int y, int height) {
-  int bulb_r = height / 5;
-  int stem_w = bulb_r;
-  int stem_h = height - bulb_r * 2;
-  int stem_x = x + bulb_r - stem_w/2;
-
-  // Draw stem (outline)
-  gdispDrawLine(stem_x, y, stem_x, y + stem_h, White);
-  gdispDrawLine(stem_x + stem_w, y, stem_x + stem_w, y + stem_h, White);
-  gdispDrawLine(stem_x, y, stem_x + stem_w, y, White);
-
-  // Draw bulb (circle outline)
-  gdispDrawCircle(x + bulb_r, y + stem_h + bulb_r, bulb_r, White);
-
-  // Fill indicator (partial fill to show temperature)
-  gdispFillCircle(x + bulb_r, y + stem_h + bulb_r, bulb_r - 2, White);
-  gdispFillArea(stem_x + 2, y + stem_h/2, stem_w - 3, stem_h/2 + 2, White);
-}
-
 // Draw time (large HH:MM) - centered
 static void draw_time(int hours, int minutes, int seconds) {
   int display_hours = hours % 12;
-  if (display_hours == 0) display_hours = 12;
+  if (display_hours == 0)
+    display_hours = 12;
 
   int h_tens = display_hours / 10;
   int h_ones = display_hours % 10;
@@ -145,21 +135,25 @@ static void draw_time(int hours, int minutes, int seconds) {
 
   int colon_width = 8;
 
-  // Calculate total width
+  // Calculate total width and starting position
+  // In 12-hour format, h_tens is always 1 (for 10, 11, 12), so use narrower width
   int total_width;
+  int x;
   if (h_tens > 0) {
-    total_width = 4 * DIGIT_WIDTH + 2 * DIGIT_SPACING + colon_width;
+    // Leading "1" uses narrower width since it only has right-side segments
+    total_width = DIGIT_WIDTH_ONE + DIGIT_SPACING + 3 * DIGIT_WIDTH + DIGIT_SPACING + colon_width;
+    x = (DISPLAY_WIDTH - total_width) / 2 - 5;
   } else {
+    // 3-digit time (1-9): center properly
     total_width = 3 * DIGIT_WIDTH + DIGIT_SPACING + colon_width;
+    x = (DISPLAY_WIDTH - total_width) / 2;
   }
-
-  // Center and apply left offset correction
-  int x = (DISPLAY_WIDTH - total_width) / 2 - 10;
 
   // Draw hour digits
   if (h_tens > 0) {
-    draw_large_digit(x, TIME_Y, h_tens);
-    x += DIGIT_WIDTH + DIGIT_SPACING;
+    // Draw leading "1" with narrower width so segments align properly
+    draw_digit_sized(x, TIME_Y, h_tens, DIGIT_WIDTH_ONE, DIGIT_HEIGHT, SEGMENT_THICK);
+    x += DIGIT_WIDTH_ONE + DIGIT_SPACING;
   }
   draw_large_digit(x, TIME_Y, h_ones);
   x += DIGIT_WIDTH;
@@ -255,9 +249,9 @@ static void draw_snow_icon(int x, int y, int size) {
   int cy = y + size / 2;
   int r = size / 2 - 1;
   // Draw 6-pointed star (3 lines through center)
-  gdispDrawLine(cx, cy - r, cx, cy + r, White);  // vertical
-  gdispDrawLine(cx - r, cy - r/2, cx + r, cy + r/2, White);  // diagonal 1
-  gdispDrawLine(cx - r, cy + r/2, cx + r, cy - r/2, White);  // diagonal 2
+  gdispDrawLine(cx, cy - r, cx, cy + r, White);                  // vertical
+  gdispDrawLine(cx - r, cy - r / 2, cx + r, cy + r / 2, White);  // diagonal 1
+  gdispDrawLine(cx - r, cy + r / 2, cx + r, cy - r / 2, White);  // diagonal 2
   // Small crossbars on each arm
   int cb = r / 3;
   gdispDrawLine(cx - cb, cy - r + cb, cx + cb, cy - r + cb, White);
@@ -282,8 +276,8 @@ static void draw_sleet_icon(int x, int y, int size) {
   int sy = y + 2;
   int sr = size / 4;
   gdispDrawLine(sx, sy, sx, sy + sr * 2, White);
-  gdispDrawLine(sx - sr, sy + sr/2, sx + sr, sy + sr + sr/2, White);
-  gdispDrawLine(sx - sr, sy + sr + sr/2, sx + sr, sy + sr/2, White);
+  gdispDrawLine(sx - sr, sy + sr / 2, sx + sr, sy + sr + sr / 2, White);
+  gdispDrawLine(sx - sr, sy + sr + sr / 2, sx + sr, sy + sr / 2, White);
 }
 
 // Draw degree symbol manually (small circle)
@@ -315,33 +309,28 @@ static void draw_moon_icon(int x, int y, int size) {
   // Draw filled circle
   gdispFillCircle(cx, cy, r, White);
   // Cut out a smaller circle to create crescent (draw in black)
-  gdispFillCircle(cx + r/2, cy - r/4, r - 1, Black);
+  gdispFillCircle(cx + r / 2, cy - r / 4, r - 1, Black);
 }
 
 // Determine precipitation type from condition string
-typedef enum {
-  PRECIP_NONE,
-  PRECIP_RAIN,
-  PRECIP_SNOW,
-  PRECIP_SLEET
-} precip_type_t;
+typedef enum { PRECIP_NONE, PRECIP_RAIN, PRECIP_SNOW, PRECIP_SLEET } precip_type_t;
 
 static precip_type_t get_precip_type(const char* condition) {
-  if (strstr(condition, "Sleet") != NULL || strstr(condition, "sleet") != NULL ||
-      strstr(condition, "Ice") != NULL || strstr(condition, "ice") != NULL ||
-      strstr(condition, "Freezing") != NULL || strstr(condition, "freezing") != NULL ||
-      strstr(condition, "Wintry") != NULL || strstr(condition, "wintry") != NULL) {
+  if (strstr(condition, "Sleet") != NULL || strstr(condition, "sleet") != NULL || strstr(condition, "Ice") != NULL ||
+      strstr(condition, "ice") != NULL || strstr(condition, "Freezing") != NULL ||
+      strstr(condition, "freezing") != NULL || strstr(condition, "Wintry") != NULL ||
+      strstr(condition, "wintry") != NULL) {
     return PRECIP_SLEET;
   }
-  if (strstr(condition, "Snow") != NULL || strstr(condition, "snow") != NULL ||
-      strstr(condition, "Flurr") != NULL || strstr(condition, "flurr") != NULL ||
-      strstr(condition, "Blizzard") != NULL || strstr(condition, "blizzard") != NULL) {
+  if (strstr(condition, "Snow") != NULL || strstr(condition, "snow") != NULL || strstr(condition, "Flurr") != NULL ||
+      strstr(condition, "flurr") != NULL || strstr(condition, "Blizzard") != NULL ||
+      strstr(condition, "blizzard") != NULL) {
     return PRECIP_SNOW;
   }
-  if (strstr(condition, "Rain") != NULL || strstr(condition, "rain") != NULL ||
-      strstr(condition, "Drizzle") != NULL || strstr(condition, "drizzle") != NULL ||
-      strstr(condition, "Shower") != NULL || strstr(condition, "shower") != NULL ||
-      strstr(condition, "Thunder") != NULL || strstr(condition, "thunder") != NULL) {
+  if (strstr(condition, "Rain") != NULL || strstr(condition, "rain") != NULL || strstr(condition, "Drizzle") != NULL ||
+      strstr(condition, "drizzle") != NULL || strstr(condition, "Shower") != NULL ||
+      strstr(condition, "shower") != NULL || strstr(condition, "Thunder") != NULL ||
+      strstr(condition, "thunder") != NULL) {
     return PRECIP_RAIN;
   }
   return PRECIP_NONE;
