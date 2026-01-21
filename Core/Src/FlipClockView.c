@@ -137,15 +137,16 @@ static void draw_time(int hours, int minutes, int seconds) {
 
   // Calculate total width and starting position
   // In 12-hour format, h_tens is always 1 (for 10, 11, 12), so use narrower width
+  int colon_spacing = DIGIT_SPACING;  // Spacing on each side of colon
   int total_width;
   int x;
   if (h_tens > 0) {
     // Leading "1" uses narrower width since it only has right-side segments
-    total_width = DIGIT_WIDTH_ONE + DIGIT_SPACING + 3 * DIGIT_WIDTH + DIGIT_SPACING + colon_width;
-    x = (DISPLAY_WIDTH - total_width) / 2 - 5;
+    total_width = DIGIT_WIDTH_ONE + DIGIT_SPACING + DIGIT_WIDTH + colon_spacing + colon_width + colon_spacing + DIGIT_WIDTH + DIGIT_SPACING + DIGIT_WIDTH;
+    x = (DISPLAY_WIDTH - total_width) / 2;
   } else {
-    // 3-digit time (1-9): center properly
-    total_width = 3 * DIGIT_WIDTH + DIGIT_SPACING + colon_width;
+    // 3-digit time (1-9): center properly with spacing around colon
+    total_width = DIGIT_WIDTH + colon_spacing + colon_width + colon_spacing + DIGIT_WIDTH + DIGIT_SPACING + DIGIT_WIDTH;
     x = (DISPLAY_WIDTH - total_width) / 2;
   }
 
@@ -156,11 +157,11 @@ static void draw_time(int hours, int minutes, int seconds) {
     x += DIGIT_WIDTH_ONE + DIGIT_SPACING;
   }
   draw_large_digit(x, TIME_Y, h_ones);
-  x += DIGIT_WIDTH;
+  x += DIGIT_WIDTH + colon_spacing;
 
   // Draw colon (blinks each second)
   draw_colon(x, TIME_Y, DIGIT_HEIGHT, seconds);
-  x += colon_width;
+  x += colon_width + colon_spacing;
 
   // Draw minute digits
   draw_large_digit(x, TIME_Y, m_tens);
@@ -192,7 +193,7 @@ static void draw_date(void) {
   font_t value_font = gdispOpenFont("DejaVuSans16");
 
   // DAY section (left side) - center label over value
-  int day_value_x = 3;
+  int day_value_x = 8;
   int day_value_width = gdispGetStringWidth(day, value_font);
   int day_label_width = gdispGetStringWidth("DAY", label_font);
   int day_label_x = day_value_x + (day_value_width - day_label_width) / 2;

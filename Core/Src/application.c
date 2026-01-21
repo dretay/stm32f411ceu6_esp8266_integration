@@ -248,52 +248,12 @@ static void on_esp_time_received(esp_time_t* time) {
     app_log_debug("Time (UTC): %04d-%02d-%02d %02d:%02d:%02d", time->year, time->month, time->day, time->hour,
                   time->minute, time->second);
 
-    // Determine timezone offset based on DST
-    bool dst = DateHelper.is_dst_us_eastern(time->year, time->month, time->day, time->hour);
-    int8_t tz_offset = dst ? -4 : -5;  // EDT = -4, EST = -5
-    app_log_debug("DST: %s, offset: %d", dst ? "yes" : "no", tz_offset);
-
-    // Apply timezone offset
-    int16_t local_hour = time->hour + tz_offset;
-    uint8_t local_day = time->day;
-    uint8_t local_month = time->month;
+    // Apply Eastern timezone offset (handles DST automatically)
     uint16_t local_year = time->year;
-
-    // Handle day rollover
-    if (local_hour < 0) {
-      local_hour += 24;
-      local_day--;
-      if (local_day == 0) {
-        local_month--;
-        if (local_month == 0) {
-          local_month = 12;
-          local_year--;
-        }
-        // Days in each month (index 0 unused, 1=Jan, etc.)
-        static const uint8_t days_in_month[] = {0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-        local_day = days_in_month[local_month];
-        // Leap year check for February
-        if (local_month == 2 && ((local_year % 4 == 0 && local_year % 100 != 0) || (local_year % 400 == 0))) {
-          local_day = 29;
-        }
-      }
-    } else if (local_hour >= 24) {
-      local_hour -= 24;
-      local_day++;
-      static const uint8_t days_in_month[] = {0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-      uint8_t max_day = days_in_month[local_month];
-      if (local_month == 2 && ((local_year % 4 == 0 && local_year % 100 != 0) || (local_year % 400 == 0))) {
-        max_day = 29;
-      }
-      if (local_day > max_day) {
-        local_day = 1;
-        local_month++;
-        if (local_month > 12) {
-          local_month = 1;
-          local_year++;
-        }
-      }
-    }
+    uint8_t local_month = time->month;
+    uint8_t local_day = time->day;
+    uint8_t local_hour = time->hour;
+    DateHelper.apply_tz_offset_eastern(&local_year, &local_month, &local_day, &local_hour);
 
     app_log_debug("Time (Local): %04d-%02d-%02d %02d:%02d:%02d", local_year, local_month, local_day, local_hour,
                   time->minute, time->second);
@@ -303,18 +263,17 @@ static void on_esp_time_received(esp_time_t* time) {
     RTC_DateTypeDef sDate = {0};
 
     // Convert 24-hour to 12-hour format (RTC is configured in 12-hour mode)
-    uint8_t hour24 = (uint8_t)local_hour;
-    if (hour24 == 0) {
+    if (local_hour == 0) {
       sTime.Hours = 12;
       sTime.TimeFormat = RTC_HOURFORMAT12_AM;
-    } else if (hour24 < 12) {
-      sTime.Hours = hour24;
+    } else if (local_hour < 12) {
+      sTime.Hours = local_hour;
       sTime.TimeFormat = RTC_HOURFORMAT12_AM;
-    } else if (hour24 == 12) {
+    } else if (local_hour == 12) {
       sTime.Hours = 12;
       sTime.TimeFormat = RTC_HOURFORMAT12_PM;
     } else {
-      sTime.Hours = hour24 - 12;
+      sTime.Hours = local_hour - 12;
       sTime.TimeFormat = RTC_HOURFORMAT12_PM;
     }
     sTime.Minutes = time->minute;
@@ -330,21 +289,7 @@ static void on_esp_time_received(esp_time_t* time) {
     sDate.Year = local_year - 2000;  // RTC year is offset from 2000
     sDate.Month = local_month;
     sDate.Date = local_day;
-    // Calculate day of week (Zeller's formula simplified)
-    // WeekDay: 1=Monday, 7=Sunday for RTC
-    int y = local_year;
-    int m = local_month;
-    int d = local_day;
-    if (m < 3) {
-      m += 12;
-      y--;
-    }
-    int dow = (d + (13 * (m + 1)) / 5 + y + y / 4 - y / 100 + y / 400) % 7;
-    // Convert from Zeller (0=Sat, 1=Sun, ..., 6=Fri) to RTC (1=Mon, ..., 7=Sun)
-    static const uint8_t zeller_to_rtc[] = {RTC_WEEKDAY_SATURDAY, RTC_WEEKDAY_SUNDAY,    RTC_WEEKDAY_MONDAY,
-                                            RTC_WEEKDAY_TUESDAY,  RTC_WEEKDAY_WEDNESDAY, RTC_WEEKDAY_THURSDAY,
-                                            RTC_WEEKDAY_FRIDAY};
-    sDate.WeekDay = zeller_to_rtc[dow];
+    sDate.WeekDay = DateHelper.calc_rtc_weekday(local_year, local_month, local_day);
 
     if (HAL_RTC_SetDate(&hrtc, &sDate, RTC_FORMAT_BIN) != HAL_OK) {
       app_log_error("Failed to set RTC date!");

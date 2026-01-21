@@ -20,5 +20,7 @@ struct datehelper {
   uint8_t (*calc_day_of_week)(uint16_t year, uint8_t month, uint8_t day);
   uint8_t (*nth_weekday_of_month)(uint16_t year, uint8_t month, uint8_t weekday, uint8_t n);
   bool (*is_dst_us_eastern)(uint16_t year, uint8_t month, uint8_t day, uint8_t hour);
+  void (*apply_tz_offset_eastern)(uint16_t* year, uint8_t* month, uint8_t* day, uint8_t* hour);
+  uint8_t (*calc_rtc_weekday)(uint16_t year, uint8_t month, uint8_t day);
 };
 extern const struct datehelper DateHelper;

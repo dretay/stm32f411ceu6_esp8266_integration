@@ -91,7 +91,7 @@ static void draw_status_item(int y, const char* label, boot_phase_state_t state)
   font_t font = gdispOpenFont("DejaVuSans12");
 
   // Draw label
-  int text_x = 40;
+  int text_x = 20;
   gdispDrawString(text_x, y + 2, label, font, White);
 
   // Draw status indicator on the right

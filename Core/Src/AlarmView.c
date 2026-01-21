@@ -145,9 +145,9 @@ static void draw_school_bus(int frame) {
   gdispFillArea(bus_x - 6, bus_y + 8, 5, 12, White);
   gdispFillArea(bus_x - 5, bus_y + 9, 3, 10, Black);
 
-  // "herndon" text on side of bus
+  // "school" text on side of bus
   font_t font = gdispOpenFont("DejaVuSans10");
-  gdispDrawString(bus_x + 38, bus_y + bus_height - 22, "Herndon", font, Black);
+  gdispDrawString(bus_x + 38, bus_y + bus_height - 22, "SCHOOL", font, Black);
   gdispCloseFont(font);
 }
 

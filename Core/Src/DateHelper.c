@@ -98,6 +98,15 @@ static uint8_t nth_weekday_of_month(uint16_t year, uint8_t month, uint8_t weekda
   return first_occurrence + (n - 1) * 7;
 }
 
+// Get days in a month, accounting for leap years
+static uint8_t days_in_month(uint16_t year, uint8_t month) {
+  static const uint8_t days[] = {0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+  if (month == 2 && ((year % 4 == 0 && year % 100 != 0) || (year % 400 == 0))) {
+    return 29;
+  }
+  return days[month];
+}
+
 // Check if DST is in effect for US Eastern timezone
 // Input is UTC time, returns true if EDT (-4), false if EST (-5)
 static bool is_dst_us_eastern(uint16_t year, uint8_t month, uint8_t day, uint8_t hour) {
@@ -133,6 +142,48 @@ static bool is_dst_us_eastern(uint16_t year, uint8_t month, uint8_t day, uint8_t
   return false;
 }
 
+// Apply US Eastern timezone offset to UTC time (modifies in place)
+// Handles day/month/year rollover automatically
+static void apply_tz_offset_eastern(uint16_t* year, uint8_t* month, uint8_t* day, uint8_t* hour) {
+  bool dst = is_dst_us_eastern(*year, *month, *day, *hour);
+  int8_t tz_offset = dst ? -4 : -5;  // EDT = -4, EST = -5
+
+  int16_t local_hour = *hour + tz_offset;
+
+  if (local_hour < 0) {
+    local_hour += 24;
+    (*day)--;
+    if (*day == 0) {
+      (*month)--;
+      if (*month == 0) {
+        *month = 12;
+        (*year)--;
+      }
+      *day = days_in_month(*year, *month);
+    }
+  } else if (local_hour >= 24) {
+    local_hour -= 24;
+    (*day)++;
+    if (*day > days_in_month(*year, *month)) {
+      *day = 1;
+      (*month)++;
+      if (*month > 12) {
+        *month = 1;
+        (*year)++;
+      }
+    }
+  }
+
+  *hour = (uint8_t)local_hour;
+}
+
+// Calculate day of week in RTC format (1=Monday, 2=Tuesday, ..., 7=Sunday)
+static uint8_t calc_rtc_weekday(uint16_t year, uint8_t month, uint8_t day) {
+  uint8_t dow = calc_day_of_week(year, month, day);  // 0=Sunday, 1=Monday, ..., 6=Saturday
+  // Convert to RTC format: 1=Monday, ..., 7=Sunday
+  return (dow == 0) ? 7 : dow;
+}
+
 const struct datehelper DateHelper = {.get_epoch = get_epoch,
                                       .get_day_of_week = get_day_of_week,
                                       .get_month = get_month,
@@ -141,4 +192,6 @@ const struct datehelper DateHelper = {.get_epoch = get_epoch,
                                       .minutes_since_midnight = minutes_since_midnight,
                                       .calc_day_of_week = calc_day_of_week,
                                       .nth_weekday_of_month = nth_weekday_of_month,
-                                      .is_dst_us_eastern = is_dst_us_eastern};
+                                      .is_dst_us_eastern = is_dst_us_eastern,
+                                      .apply_tz_offset_eastern = apply_tz_offset_eastern,
+                                      .calc_rtc_weekday = calc_rtc_weekday};
