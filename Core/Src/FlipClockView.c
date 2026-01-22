@@ -200,14 +200,21 @@ static void draw_date(void) {
   gdispDrawString(day_label_x, DATE_LABEL_Y, "DAY", label_font, White);
   gdispDrawString(day_value_x, DATE_Y + 4, day, value_font, White);
 
-  // Right side: MONTH and DATE with values below
-  int right_offset = 20;
+  // Right side: MONTH/DATE label centered over the digits
+  // First calculate the width of the number display
+  int num_start_x = 85;  // Starting x for month digits
+  int month_width = (month >= 10) ? (MED_DIGIT_WIDTH * 2 + MED_DIGIT_SPACING) : MED_DIGIT_WIDTH;
+  int slash_width = 10;
+  int date_width = (date >= 10) ? (MED_DIGIT_WIDTH * 2 + MED_DIGIT_SPACING) : MED_DIGIT_WIDTH;
+  int total_num_width = month_width + 2 + slash_width + date_width;
 
-  // Position month label and digits
-  int month_label_x = 60 + right_offset;
-  gdispDrawString(month_label_x, DATE_LABEL_Y, "MONTH", label_font, White);
+  // Draw combined label centered over the numbers
+  int label_width = gdispGetStringWidth("MONTH / DATE", label_font);
+  int label_x = num_start_x + (total_num_width - label_width) / 2;
+  gdispDrawString(label_x, DATE_LABEL_Y, "MONTH / DATE", label_font, White);
 
-  int month_x = 65 + right_offset;
+  // Draw month digits
+  int month_x = num_start_x;
   if (month >= 10) {
     draw_med_digit(month_x, DATE_Y, month / 10);
     month_x += MED_DIGIT_WIDTH + MED_DIGIT_SPACING;
@@ -219,8 +226,7 @@ static void draw_date(void) {
   draw_slash(month_x, DATE_Y, MED_DIGIT_HEIGHT);
   int date_x = month_x + 10;
 
-  // DATE label and digits
-  gdispDrawString(date_x + 5, DATE_LABEL_Y, "DATE", label_font, White);
+  // Draw date digits
   if (date >= 10) {
     draw_med_digit(date_x, DATE_Y, date / 10);
     date_x += MED_DIGIT_WIDTH + MED_DIGIT_SPACING;

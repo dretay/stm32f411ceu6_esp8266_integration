@@ -8,6 +8,12 @@ static View* status_view;
 static View* alarm_view;
 static View* calendar_view;
 static bool boot_complete = false;
+
+// View cycling state (0 = flip clock, 1 = calendar)
+static uint8_t active_view = 0;
+#define CLOCK_DISPLAY_TIME 30000    // 30 seconds on clock
+#define CALENDAR_DISPLAY_TIME 10000 // 10 seconds on calendar
+#define CALENDAR_REFRESH_INTERVAL 3600000  // 1 hour
 extern TIM_HandleTypeDef htim1;
 extern TIM_HandleTypeDef htim3;
 extern SPI_HandleTypeDef hspi2;
@@ -221,6 +227,22 @@ static void retry_calendar_cb(void) {
   app_log_debug("Retrying calendar request...");
   ESPComm.request_calendar(4, on_esp_calendar_received);
 }
+static void cycle_view_cb(void) {
+  active_view = (active_view + 1) % 2;  // Toggle between 0 and 1
+  // Schedule next switch based on which view we just switched to
+  if (active_view == 0) {
+    // Switched to clock, show for 30 seconds
+    Timer.in(CLOCK_DISPLAY_TIME, cycle_view_cb);
+  } else {
+    // Switched to calendar, show for 10 seconds
+    Timer.in(CALENDAR_DISPLAY_TIME, cycle_view_cb);
+  }
+}
+static void refresh_calendar_cb(void) {
+  app_log_debug("Refreshing calendar...");
+  ESPComm.request_calendar(4, on_esp_calendar_received);
+  Timer.in(CALENDAR_REFRESH_INTERVAL, refresh_calendar_cb);
+}
 static void on_esp_error(const char* error) {
   app_log_error("ESP error: %s", error);
 
@@ -288,8 +310,12 @@ static void on_esp_calendar_received(esp_calendar_t* cal) {
     StatusView.set_calendar_state(BOOT_PHASE_COMPLETE);
     boot_complete = true;
     app_log_debug("Boot complete, switching to flip clock view");
-    // Start periodic weather/time refresh
+    // Start periodic weather/time refresh (10 minutes)
     Timer.in(600000, request_weather_and_time_cb);
+    // Start view cycling (clock shows first for 30 seconds)
+    Timer.in(CLOCK_DISPLAY_TIME, cycle_view_cb);
+    // Start calendar refresh (1 hour)
+    Timer.in(CALENDAR_REFRESH_INTERVAL, refresh_calendar_cb);
   }
 }
 
@@ -435,10 +461,13 @@ static void init() {
 // TODO: a "settings" screen to control volume and brightness, persist in
 // eeprom, maybe alarm time?
 static void run(void) {
-  // alarm_view->render();
-  // Show status view during boot, then switch to flip clock
+  // Show status view during boot, then cycle between flip clock and calendar
   if (boot_complete) {
-    flip_clock_view->render();
+    if (active_view == 0) {
+      flip_clock_view->render();
+    } else {
+      calendar_view->render();
+    }
   } else {
     status_view->render();
   }
