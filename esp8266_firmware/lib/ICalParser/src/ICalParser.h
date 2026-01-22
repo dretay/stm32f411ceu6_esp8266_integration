@@ -7,8 +7,8 @@
 #include <WiFiClientSecure.h>
 #include <time.h>
 
-// Maximum events that can be returned
-#define ICAL_MAX_EVENTS 20
+// Maximum events that can be returned (reduced to save memory)
+#define ICAL_MAX_EVENTS 12
 #define ICAL_MAX_TITLE_LEN 64
 
 // RRULE frequency types
@@ -31,8 +31,10 @@ typedef struct {
 
 // Calendar event
 typedef struct {
-  time_t occurrence;       // When this event occurs
-  char datetime[20];       // Formatted: "YYYY-MM-DD HH:MM"
+  time_t occurrence;       // When this event starts
+  time_t endOccurrence;    // When this event ends
+  char datetime[20];       // Formatted start: "YYYY-MM-DD HH:MM"
+  char endDatetime[20];    // Formatted end: "YYYY-MM-DD HH:MM"
   char title[ICAL_MAX_TITLE_LEN];
 } ICalEvent;
 
@@ -86,7 +88,7 @@ private:
   void debugf(const char* fmt, ...);
 
   void insertSortedEvent(ICalEvent* events, int* count, int maxEvents,
-                         time_t occurrence, const char* title);
+                         time_t occurrence, time_t endOccurrence, const char* title);
 };
 
 #endif // ICAL_PARSER_H

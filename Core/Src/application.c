@@ -6,6 +6,7 @@ static View* clock_view;
 static View* flip_clock_view;
 static View* status_view;
 static View* alarm_view;
+static View* calendar_view;
 static bool boot_complete = false;
 extern TIM_HandleTypeDef htim1;
 extern TIM_HandleTypeDef htim3;
@@ -197,8 +198,55 @@ static void on_esp_balance_received(esp_balance_t* balance);
 static void on_esp_calendar_received(esp_calendar_t* cal);
 static void on_esp_status_received(esp_status_t* status);
 static void request_weather_and_time_cb(void);
+static void on_esp_error(const char* error);
+
+// Retry delay in milliseconds
+#define ESP_RETRY_DELAY 3000
 static void on_esp_status_received_cb(void) {
   ESPComm.request_status(on_esp_status_received);
+}
+static void retry_time_cb(void) {
+  app_log_debug("Retrying time request...");
+  ESPComm.request_time(on_esp_time_received);
+}
+static void retry_weather_cb(void) {
+  app_log_debug("Retrying weather request...");
+  ESPComm.request_weather(on_esp_weather_received);
+}
+static void retry_balance_cb(void) {
+  app_log_debug("Retrying balance request...");
+  ESPComm.request_balance(on_esp_balance_received);
+}
+static void retry_calendar_cb(void) {
+  app_log_debug("Retrying calendar request...");
+  ESPComm.request_calendar(4, on_esp_calendar_received);
+}
+static void on_esp_error(const char* error) {
+  app_log_error("ESP error: %s", error);
+
+  // Determine which request failed and schedule a retry
+  if (strstr(error, "NTP") != NULL) {
+    Timer.in(ESP_RETRY_DELAY, retry_time_cb);
+  } else if (strstr(error, "WEATHER") != NULL ||
+             (strstr(error, "JSON_PARSE") != NULL && !boot_complete)) {
+    // JSON_PARSE during boot is likely weather-related
+    Timer.in(ESP_RETRY_DELAY, retry_weather_cb);
+  } else if (strstr(error, "BALANCE") != NULL || strstr(error, "GSHEET") != NULL) {
+    Timer.in(ESP_RETRY_DELAY, retry_balance_cb);
+  } else if (strstr(error, "CALENDAR") != NULL) {
+    Timer.in(ESP_RETRY_DELAY, retry_calendar_cb);
+  } else if (strstr(error, "HTTP_") != NULL) {
+    // Generic HTTP error - retry the current boot phase
+    if (!boot_complete) {
+      if (StatusView.is_boot_complete()) {
+        // All phases complete, nothing to retry
+      } else {
+        // Retry based on current phase - check which phase is in progress
+        // For now, just log it - the specific error handlers above should catch most cases
+        app_log_debug("HTTP error during boot, waiting for next request");
+      }
+    }
+  }
 }
 static void on_esp_status_received(esp_status_t* status) {
   if (!status->valid || !status->connected || status->gsheet_status != GSHEET_READY) {
@@ -224,12 +272,14 @@ static void on_esp_balance_received(esp_balance_t* balance) {
   if (!boot_complete) {
     StatusView.set_balance_state(BOOT_PHASE_COMPLETE);
     StatusView.set_calendar_state(BOOT_PHASE_IN_PROGRESS);
-    ESPComm.request_calendar(10, on_esp_calendar_received);
+    ESPComm.request_calendar(4, on_esp_calendar_received);
   }
 }
 static void on_esp_calendar_received(esp_calendar_t* cal) {
   if (cal->valid) {
     app_log_debug("Received %d calendar events", cal->event_count);
+    // Update CalendarView with the events
+    CalendarView.set_events((calendar_event_t*)cal->events, cal->event_count);
   } else {
     app_log_error("Unable to fetch calendar!");
   }
@@ -346,6 +396,7 @@ static void init() {
   flip_clock_view = FlipClockView.init();
   status_view = StatusView.init();
   alarm_view = AlarmView.init();
+  calendar_view = CalendarView.init();
 
   Timer.init();
 
@@ -353,6 +404,7 @@ static void init() {
   StatusView.set_wifi_state(BOOT_PHASE_IN_PROGRESS);
 
   ESPComm.init(&huart2);
+  ESPComm.set_error_callback(on_esp_error);
   ESPComm.set_wifi(wifi_ssid, wifi_password);
   HAL_Delay(100);
   ESPComm.set_gcp_project(project_id);

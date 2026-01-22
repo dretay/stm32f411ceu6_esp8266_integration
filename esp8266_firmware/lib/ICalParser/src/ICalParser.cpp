@@ -184,7 +184,7 @@ time_t ICalParser::getNextOccurrence(time_t dtstart, ICalRRule rule, time_t afte
 }
 
 void ICalParser::insertSortedEvent(ICalEvent* events, int* count, int maxEvents,
-                                   time_t occurrence, const char* title) {
+                                   time_t occurrence, time_t endOccurrence, const char* title) {
   if (occurrence == 0) return;
   if (maxEvents > ICAL_MAX_EVENTS) maxEvents = ICAL_MAX_EVENTS;
 
@@ -208,10 +208,18 @@ void ICalParser::insertSortedEvent(ICalEvent* events, int* count, int maxEvents,
 
   // Insert new event
   events[insertIdx].occurrence = occurrence;
+  events[insertIdx].endOccurrence = endOccurrence;
+
   struct tm* tmInfo = localtime(&occurrence);
   snprintf(events[insertIdx].datetime, 20, "%04d-%02d-%02d %02d:%02d",
            tmInfo->tm_year + 1900, tmInfo->tm_mon + 1, tmInfo->tm_mday,
            tmInfo->tm_hour, tmInfo->tm_min);
+
+  struct tm* endTmInfo = localtime(&endOccurrence);
+  snprintf(events[insertIdx].endDatetime, 20, "%04d-%02d-%02d %02d:%02d",
+           endTmInfo->tm_year + 1900, endTmInfo->tm_mon + 1, endTmInfo->tm_mday,
+           endTmInfo->tm_hour, endTmInfo->tm_min);
+
   strncpy(events[insertIdx].title, title, ICAL_MAX_TITLE_LEN - 1);
   events[insertIdx].title[ICAL_MAX_TITLE_LEN - 1] = '\0';
 
@@ -271,6 +279,7 @@ ICalResult ICalParser::fetch(const char* url, time_t currentTime, int maxEvents)
 
   String line = "";
   String currentDtStart = "";
+  String currentDtEnd = "";
   String currentSummary = "";
   String currentRRule = "";
   bool inEvent = false;
@@ -299,6 +308,7 @@ ICalResult ICalParser::fetch(const char* url, time_t currentTime, int maxEvents)
         if (line == "BEGIN:VEVENT") {
           inEvent = true;
           currentDtStart = "";
+          currentDtEnd = "";
           currentSummary = "";
           currentRRule = "";
           currentCancelled = false;
@@ -315,6 +325,9 @@ ICalResult ICalParser::fetch(const char* url, time_t currentTime, int maxEvents)
           // Process the completed event
           if (currentDtStart.length() > 0 && currentSummary.length() > 0) {
             time_t dtstart = parseDate(currentDtStart.c_str());
+            time_t dtend = (currentDtEnd.length() > 0) ? parseDate(currentDtEnd.c_str()) : dtstart;
+            time_t duration = dtend - dtstart;  // Duration in seconds
+
             ICalRRule rule = parseRRule(currentRRule.c_str());
 
             if (rule.freq != ICAL_FREQ_NONE) {
@@ -325,8 +338,10 @@ ICalResult ICalParser::fetch(const char* url, time_t currentTime, int maxEvents)
             time_t nextOccur = getNextOccurrence(dtstart, rule, now);
 
             if (nextOccur > 0) {
+              // Calculate end time by adding duration to the occurrence
+              time_t endOccur = nextOccur + duration;
               insertSortedEvent(result.events, &result.eventCount, maxEvents,
-                                nextOccur, currentSummary.c_str());
+                                nextOccur, endOccur, currentSummary.c_str());
             }
           }
         } else if (inEvent) {
@@ -335,6 +350,12 @@ ICalResult ICalParser::fetch(const char* url, time_t currentTime, int maxEvents)
             if (colonIdx > 0) {
               currentDtStart = line.substring(colonIdx + 1);
               currentDtStart.trim();
+            }
+          } else if (line.startsWith("DTEND")) {
+            int colonIdx = line.indexOf(':');
+            if (colonIdx > 0) {
+              currentDtEnd = line.substring(colonIdx + 1);
+              currentDtEnd.trim();
             }
           } else if (line.startsWith("SUMMARY:")) {
             currentSummary = line.substring(8);

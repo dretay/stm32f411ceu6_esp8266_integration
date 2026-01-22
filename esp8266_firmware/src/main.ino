@@ -602,19 +602,29 @@ void handleCalendarCommand(const char* params) {
   WiFiClient* stream = http.getStreamPtr();
   time_t now = timeClient.getEpochTime();
 
-  // Use static storage to reduce stack usage
-  static ICalEvent calEvents[20];
+  // Use static storage to reduce stack usage (reduced from 20 to save memory)
+  static ICalEvent calEvents[12];
   int calEventCount = 0;
+  if (maxEvents > 12) maxEvents = 12;
 
-  String line = "";
-  String currentDtStart = "";
-  String currentSummary = "";
-  String currentRRule = "";
+  // Use static buffers instead of String to reduce heap fragmentation
+  static char lineBuf[257];
+  static char currentDtStart[32];
+  static char currentDtEnd[32];
+  static char currentSummary[ICAL_MAX_TITLE_LEN];
+  static char currentRRule[128];
+  int lineLen = 0;
+  currentDtStart[0] = '\0';
+  currentDtEnd[0] = '\0';
+  currentSummary[0] = '\0';
+  currentRRule[0] = '\0';
   bool inEvent = false;
   bool currentCancelled = false;
   bool hasRecurrenceId = false;
 
   comm.debugf("Parsing (max %d events)...", maxEvents);
+  yield();  // Prevent watchdog reset
+  comm.debugf("Heap before parse: %d", ESP.getFreeHeap());
 
   unsigned long parseStart = millis();
   unsigned long lastData = millis();
@@ -630,28 +640,36 @@ void handleCalendarCommand(const char* params) {
       char c = stream->read();
 
       if (c == '\n') {
-        line.trim();
+        lineBuf[lineLen] = '\0';
+        // Trim trailing whitespace
+        while (lineLen > 0 && (lineBuf[lineLen-1] == ' ' || lineBuf[lineLen-1] == '\t')) {
+          lineBuf[--lineLen] = '\0';
+        }
         lineCount++;
 
-        if (line == "BEGIN:VEVENT") {
+        if (strcmp(lineBuf, "BEGIN:VEVENT") == 0) {
           inEvent = true;
-          currentDtStart = "";
-          currentSummary = "";
-          currentRRule = "";
+          currentDtStart[0] = '\0';
+          currentDtEnd[0] = '\0';
+          currentSummary[0] = '\0';
+          currentRRule[0] = '\0';
           currentCancelled = false;
           hasRecurrenceId = false;
-        } else if (line == "END:VEVENT" && inEvent) {
+        } else if (strcmp(lineBuf, "END:VEVENT") == 0 && inEvent) {
           inEvent = false;
           eventsSeen++;
 
           if (currentCancelled || hasRecurrenceId) {
-            line = "";
+            lineLen = 0;
             continue;
           }
 
-          if (currentDtStart.length() > 0 && currentSummary.length() > 0) {
-            time_t dtstart = ICalParser::parseDate(currentDtStart.c_str());
-            ICalRRule rule = ICalParser::parseRRule(currentRRule.c_str());
+          if (strlen(currentDtStart) > 0 && strlen(currentSummary) > 0) {
+            time_t dtstart = ICalParser::parseDate(currentDtStart);
+            time_t dtend = (strlen(currentDtEnd) > 0) ? ICalParser::parseDate(currentDtEnd) : dtstart;
+            time_t duration = dtend - dtstart;  // Duration in seconds
+
+            ICalRRule rule = ICalParser::parseRRule(currentRRule);
 
             if (rule.freq != ICAL_FREQ_NONE) {
               recurringCount++;
@@ -660,6 +678,8 @@ void handleCalendarCommand(const char* params) {
             time_t nextOccur = ICalParser::getNextOccurrence(dtstart, rule, now);
 
             if (nextOccur > 0) {
+              time_t endOccur = nextOccur + duration;  // Calculate end time
+
               // Insert sorted
               int insertIdx = calEventCount;
               for (int i = 0; i < calEventCount; i++) {
@@ -676,11 +696,19 @@ void handleCalendarCommand(const char* params) {
                 }
 
                 calEvents[insertIdx].occurrence = nextOccur;
+                calEvents[insertIdx].endOccurrence = endOccur;
+
                 struct tm* tmInfo = localtime(&nextOccur);
                 snprintf(calEvents[insertIdx].datetime, 20, "%04d-%02d-%02d %02d:%02d",
                          tmInfo->tm_year + 1900, tmInfo->tm_mon + 1, tmInfo->tm_mday,
                          tmInfo->tm_hour, tmInfo->tm_min);
-                strncpy(calEvents[insertIdx].title, currentSummary.c_str(), ICAL_MAX_TITLE_LEN - 1);
+
+                struct tm* endTmInfo = localtime(&endOccur);
+                snprintf(calEvents[insertIdx].endDatetime, 20, "%04d-%02d-%02d %02d:%02d",
+                         endTmInfo->tm_year + 1900, endTmInfo->tm_mon + 1, endTmInfo->tm_mday,
+                         endTmInfo->tm_hour, endTmInfo->tm_min);
+
+                strncpy(calEvents[insertIdx].title, currentSummary, ICAL_MAX_TITLE_LEN - 1);
                 calEvents[insertIdx].title[ICAL_MAX_TITLE_LEN - 1] = '\0';
 
                 if (calEventCount < maxEvents) calEventCount++;
@@ -688,30 +716,38 @@ void handleCalendarCommand(const char* params) {
             }
           }
         } else if (inEvent) {
-          if (line.startsWith("DTSTART")) {
-            int colonIdx = line.indexOf(':');
-            if (colonIdx > 0) {
-              currentDtStart = line.substring(colonIdx + 1);
-              currentDtStart.trim();
+          if (strncmp(lineBuf, "DTSTART", 7) == 0) {
+            char* colon = strchr(lineBuf, ':');
+            if (colon) {
+              strncpy(currentDtStart, colon + 1, sizeof(currentDtStart) - 1);
+              currentDtStart[sizeof(currentDtStart) - 1] = '\0';
             }
-          } else if (line.startsWith("SUMMARY:")) {
-            currentSummary = line.substring(8);
-          } else if (line.startsWith("RRULE:")) {
-            currentRRule = line.substring(6);
-          } else if (line.startsWith("STATUS:")) {
-            if (line.indexOf("CANCELLED") >= 0) {
+          } else if (strncmp(lineBuf, "DTEND", 5) == 0) {
+            char* colon = strchr(lineBuf, ':');
+            if (colon) {
+              strncpy(currentDtEnd, colon + 1, sizeof(currentDtEnd) - 1);
+              currentDtEnd[sizeof(currentDtEnd) - 1] = '\0';
+            }
+          } else if (strncmp(lineBuf, "SUMMARY:", 8) == 0) {
+            strncpy(currentSummary, lineBuf + 8, sizeof(currentSummary) - 1);
+            currentSummary[sizeof(currentSummary) - 1] = '\0';
+          } else if (strncmp(lineBuf, "RRULE:", 6) == 0) {
+            strncpy(currentRRule, lineBuf + 6, sizeof(currentRRule) - 1);
+            currentRRule[sizeof(currentRRule) - 1] = '\0';
+          } else if (strncmp(lineBuf, "STATUS:", 7) == 0) {
+            if (strstr(lineBuf, "CANCELLED") != nullptr) {
               currentCancelled = true;
             }
-          } else if (line.startsWith("RECURRENCE-ID")) {
+          } else if (strncmp(lineBuf, "RECURRENCE-ID", 13) == 0) {
             hasRecurrenceId = true;
           }
         }
 
-        line = "";
+        lineLen = 0;
         yield();
       } else if (c != '\r') {
-        if (line.length() < 256) {
-          line += c;
+        if (lineLen < 256) {
+          lineBuf[lineLen++] = c;
         }
       }
     } else {
@@ -731,7 +767,7 @@ void handleCalendarCommand(const char* params) {
   http.end();
   comm.debugf("Found %d upcoming events", calEventCount);
 
-  // Build response: CALENDAR:count,datetime|title;datetime|title;...
+  // Build response: CALENDAR:count,start|end|title;start|end|title;...
   if (calEventCount == 0) {
     comm.send("CALENDAR:0");
   } else {
@@ -740,6 +776,8 @@ void handleCalendarCommand(const char* params) {
     for (int i = 0; i < calEventCount; i++) {
       response += (i == 0) ? "," : ";";
       response += calEvents[i].datetime;
+      response += "|";
+      response += calEvents[i].endDatetime;
       response += "|";
       response += calEvents[i].title;
     }

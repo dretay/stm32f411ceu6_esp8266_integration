@@ -380,8 +380,11 @@ static void esp_parse_balance(const char* data) {
 static void esp_parse_calendar(const char* data) {
   esp_calendar_t calendar = {0};
 
-  // New format: "count,datetime|title;datetime|title;..." or "0" for no events
-  // Parse the count first
+  // Supports two formats:
+  // New: "count,start|end|title;start|end|title;..." (two pipes per event)
+  // Old: "count,datetime|title;datetime|title;..." (one pipe per event)
+  // Also handles "0" or "NO_EVENTS" for empty calendar
+
   const char* comma = strchr(data, ',');
   if (!comma) {
     // Either "0" or old "NO_EVENTS" format
@@ -398,35 +401,66 @@ static void esp_parse_calendar(const char* data) {
     return;
   }
 
-  // Parse events after the comma: "datetime|title;datetime|title;..."
+  // Parse events after the comma
   const char* ptr = comma + 1;
   while (calendar.event_count < ESP_CALENDAR_MAX_EVENTS && *ptr) {
     esp_calendar_event_t* event = &calendar.events[calendar.event_count];
 
-    // Find the pipe separator (datetime|title)
-    const char* pipe = strchr(ptr, '|');
-    if (!pipe)
+    // Find first pipe separator
+    const char* pipe1 = strchr(ptr, '|');
+    if (!pipe1)
       break;
 
-    // Copy datetime
-    size_t datetime_len = pipe - ptr;
-    if (datetime_len >= sizeof(event->datetime)) {
-      datetime_len = sizeof(event->datetime) - 1;
-    }
-    strncpy(event->datetime, ptr, datetime_len);
-    event->datetime[datetime_len] = '\0';
-
     // Find end of this event (semicolon or end of string)
-    const char* semi = strchr(pipe + 1, ';');
-    const char* title_end = semi ? semi : ptr + strlen(ptr);
+    const char* semi = strchr(ptr, ';');
+    const char* event_end = semi ? semi : ptr + strlen(ptr);
 
-    // Copy title
-    size_t title_len = title_end - (pipe + 1);
-    if (title_len >= ESP_CALENDAR_MAX_TITLE_LEN) {
-      title_len = ESP_CALENDAR_MAX_TITLE_LEN - 1;
+    // Check if there's a second pipe before event_end (new format)
+    const char* pipe2 = strchr(pipe1 + 1, '|');
+    bool has_end_time = (pipe2 && pipe2 < event_end);
+
+    if (has_end_time) {
+      // New format: start|end|title
+      size_t start_len = pipe1 - ptr;
+      if (start_len >= sizeof(event->start)) {
+        start_len = sizeof(event->start) - 1;
+      }
+      strncpy(event->start, ptr, start_len);
+      event->start[start_len] = '\0';
+
+      size_t end_len = pipe2 - (pipe1 + 1);
+      if (end_len >= sizeof(event->end)) {
+        end_len = sizeof(event->end) - 1;
+      }
+      strncpy(event->end, pipe1 + 1, end_len);
+      event->end[end_len] = '\0';
+
+      size_t title_len = event_end - (pipe2 + 1);
+      if (title_len >= ESP_CALENDAR_MAX_TITLE_LEN) {
+        title_len = ESP_CALENDAR_MAX_TITLE_LEN - 1;
+      }
+      strncpy(event->title, pipe2 + 1, title_len);
+      event->title[title_len] = '\0';
+    } else {
+      // Old format: datetime|title (use datetime as both start and end)
+      size_t datetime_len = pipe1 - ptr;
+      if (datetime_len >= sizeof(event->start)) {
+        datetime_len = sizeof(event->start) - 1;
+      }
+      strncpy(event->start, ptr, datetime_len);
+      event->start[datetime_len] = '\0';
+
+      // Copy same time to end field
+      strncpy(event->end, event->start, sizeof(event->end) - 1);
+      event->end[sizeof(event->end) - 1] = '\0';
+
+      size_t title_len = event_end - (pipe1 + 1);
+      if (title_len >= ESP_CALENDAR_MAX_TITLE_LEN) {
+        title_len = ESP_CALENDAR_MAX_TITLE_LEN - 1;
+      }
+      strncpy(event->title, pipe1 + 1, title_len);
+      event->title[title_len] = '\0';
     }
-    strncpy(event->title, pipe + 1, title_len);
-    event->title[title_len] = '\0';
 
     calendar.event_count++;
 
@@ -592,6 +626,10 @@ static bool request_calendar(uint8_t max_events, esp_calendar_callback_t callbac
   }
 }
 
+static void set_error_callback(esp_error_callback_t callback) {
+  error_callback = callback;
+}
+
 void process(void) {
   // Process DMA buffer for complete messages
   esp_process_dma_buffer();
@@ -645,6 +683,7 @@ const struct espcomm ESPComm = {
     .request_status = request_status,
     .request_balance = request_balance,
     .request_calendar = request_calendar,
+    .set_error_callback = set_error_callback,
     .uart_irq_handler = uart_irq_handler,
     .process = process,
 };

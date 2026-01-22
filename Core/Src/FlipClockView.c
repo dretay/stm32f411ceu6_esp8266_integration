@@ -381,11 +381,23 @@ static void draw_temp(void) {
   precip_type_t precip = get_precip_type(weather_data.condition);
 
   // Get current hour to determine day/night
+  // RTC stores local time in 12-hour format with AM/PM flag
   RTC_TimeTypeDef currentTime;
   RTC_DateTypeDef currentDate;
   HAL_RTC_GetTime(&hrtc, &currentTime, RTC_FORMAT_BIN);
   HAL_RTC_GetDate(&hrtc, &currentDate, RTC_FORMAT_BIN);
-  bool is_day = (currentTime.Hours >= 6 && currentTime.Hours < 18);
+
+  // Convert 12-hour RTC format to 24-hour for day/night check
+  uint8_t hour_24;
+  if (currentTime.TimeFormat == RTC_HOURFORMAT12_AM) {
+    // AM: 12 AM = 0, 1-11 AM = 1-11
+    hour_24 = (currentTime.Hours == 12) ? 0 : currentTime.Hours;
+  } else {
+    // PM: 12 PM = 12, 1-11 PM = 13-23
+    hour_24 = (currentTime.Hours == 12) ? 12 : currentTime.Hours + 12;
+  }
+
+  bool is_day = (hour_24 >= 6 && hour_24 < 20);
 
   // Always draw weather icon
   switch (precip) {

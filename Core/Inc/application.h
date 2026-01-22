@@ -7,6 +7,7 @@
 #endif
 
 #include "AlarmView.h"
+#include "CalendarView.h"
 #include "ClockView.h"
 #include "FlipClockView.h"
 #include "StatusView.h"

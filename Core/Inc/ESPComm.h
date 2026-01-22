@@ -50,7 +50,8 @@ typedef struct {
 #define ESP_CALENDAR_MAX_TITLE_LEN 64
 
 typedef struct {
-  char datetime[20];  // YYYY-MM-DD HH:MM
+  char start[20];  // YYYY-MM-DD HH:MM
+  char end[20];    // YYYY-MM-DD HH:MM
   char title[ESP_CALENDAR_MAX_TITLE_LEN];
 } esp_calendar_event_t;
 
@@ -87,6 +88,7 @@ struct espcomm {
   bool (*request_status)(esp_status_callback_t);
   bool (*request_balance)(esp_balance_callback_t);
   bool (*request_calendar)(uint8_t, esp_calendar_callback_t);
+  void (*set_error_callback)(esp_error_callback_t);
   void (*uart_irq_handler)(void);
   void (*process)(void);
 };
