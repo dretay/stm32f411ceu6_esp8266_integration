@@ -363,8 +363,8 @@ static void on_esp_calendar_received(esp_calendar_t* cal) {
     app_log_debug("Boot complete, switching to flip clock view");
     // Start periodic weather/time refresh (10 minutes)
     Timer.every(600000, request_weather_and_time_cb);
-    // Start periodic balance refresh (10 minutes)
-    Timer.every(600000, refresh_balance_cb);
+    // Start periodic balance refresh (10 minutes 30 seconds for spacing)
+    Timer.every(600000 + 30000, refresh_balance_cb);
     // Start view cycling (clock shows first for 30 seconds, uses self-rescheduling for variable intervals)
     Timer.in(CLOCK_DISPLAY_TIME, cycle_view_cb);
     // Start calendar refresh (1 hour)
