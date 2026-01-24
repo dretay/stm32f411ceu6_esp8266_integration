@@ -19,7 +19,7 @@ static View view;
 static calendar_event_t events[CALENDAR_MAX_EVENTS];
 static uint8_t event_count = 0;
 
-// Format time from "YYYY-MM-DD HH:MM" to "10:30a" (converts UTC to Eastern)
+// Format time from "YYYY-MM-DD HH:MM" to "10:30a"
 static void format_time_only(const char* datetime, char* output, size_t output_size) {
   int year, month, day, hour, minute;
   if (sscanf(datetime, "%d-%d-%d %d:%d", &year, &month, &day, &hour, &minute) != 5) {
@@ -28,22 +28,15 @@ static void format_time_only(const char* datetime, char* output, size_t output_s
     return;
   }
 
-  // Convert UTC to Eastern time
-  uint16_t local_year = year;
-  uint8_t local_month = month;
-  uint8_t local_day = day;
-  uint8_t local_hour = hour;
-  DateHelper.apply_tz_offset_eastern(&local_year, &local_month, &local_day, &local_hour);
-
   // Convert to 12-hour format
   const char* ampm = "a";
-  int display_hour = local_hour;
-  if (local_hour == 0) {
+  int display_hour = hour;
+  if (hour == 0) {
     display_hour = 12;
-  } else if (local_hour == 12) {
+  } else if (hour == 12) {
     ampm = "p";
-  } else if (local_hour > 12) {
-    display_hour = local_hour - 12;
+  } else if (hour > 12) {
+    display_hour = hour - 12;
     ampm = "p";
   }
 
@@ -58,14 +51,7 @@ static const char* get_day_abbrev(const char* datetime) {
     return "???";
   }
 
-  // Convert to local time first
-  uint16_t local_year = year;
-  uint8_t local_month = month;
-  uint8_t local_day = day;
-  uint8_t local_hour = hour;
-  DateHelper.apply_tz_offset_eastern(&local_year, &local_month, &local_day, &local_hour);
-
-  uint8_t dow = DateHelper.calc_day_of_week(local_year, local_month, local_day);
+  uint8_t dow = DateHelper.calc_day_of_week(year, month, day);
   return day_abbrev[dow];
 }
 

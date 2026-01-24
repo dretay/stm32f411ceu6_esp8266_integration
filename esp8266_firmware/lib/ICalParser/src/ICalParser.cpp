@@ -33,6 +33,37 @@ void ICalParser::debugf(const char* fmt, ...) {
   }
 }
 
+// Check if date string ends with 'Z' (UTC indicator)
+static bool isUtcTime(const char* dateStr) {
+  size_t len = strlen(dateStr);
+  return len > 0 && dateStr[len - 1] == 'Z';
+}
+
+// Convert UTC hour to US Eastern time (EST/EDT)
+// Returns adjusted hour (may be negative or >= 24, caller handles day rollover)
+static int utcToEasternHour(int year, int month, int day, int hour) {
+  // Simplified DST check for US Eastern:
+  // DST starts 2nd Sunday of March, ends 1st Sunday of November
+  bool isDst = false;
+
+  if (month > 3 && month < 11) {
+    isDst = true;
+  } else if (month == 3) {
+    // 2nd Sunday of March: find it
+    int firstDay = (1 + (year + year/4 - year/100 + year/400 + 13) % 7) % 7; // day of week for March 1
+    int secondSunday = (firstDay == 0) ? 8 : (15 - firstDay);
+    isDst = (day > secondSunday) || (day == secondSunday && hour >= 7);
+  } else if (month == 11) {
+    // 1st Sunday of November
+    int firstDay = (1 + (year + year/4 - year/100 + year/400 + 13 + 31 + 30 + 31 + 31 + 30 + 31 + 30) % 7) % 7;
+    int firstSunday = (firstDay == 0) ? 1 : (8 - firstDay);
+    isDst = (day < firstSunday) || (day == firstSunday && hour < 6);
+  }
+
+  int offset = isDst ? -4 : -5;  // EDT = UTC-4, EST = UTC-5
+  return hour + offset;
+}
+
 time_t ICalParser::parseDate(const char* dateStr) {
   struct tm tm = {0};
   int year, month, day, hour = 0, minute = 0, second = 0;
@@ -42,6 +73,48 @@ time_t ICalParser::parseDate(const char* dateStr) {
     if (strlen(dateStr) >= 15 && dateStr[8] == 'T') {
       sscanf(dateStr + 9, "%2d%2d%2d", &hour, &minute, &second);
     }
+
+    // Convert UTC to Eastern time if 'Z' suffix present
+    if (isUtcTime(dateStr)) {
+      int localHour = utcToEasternHour(year, month, day, hour);
+
+      // Handle day rollover
+      if (localHour < 0) {
+        localHour += 24;
+        day--;
+        if (day == 0) {
+          month--;
+          if (month == 0) {
+            month = 12;
+            year--;
+          }
+          // Days in previous month
+          static const int daysInMonth[] = {0,31,28,31,30,31,30,31,31,30,31,30,31};
+          day = daysInMonth[month];
+          if (month == 2 && ((year % 4 == 0 && year % 100 != 0) || year % 400 == 0)) {
+            day = 29;
+          }
+        }
+      } else if (localHour >= 24) {
+        localHour -= 24;
+        day++;
+        static const int daysInMonth[] = {0,31,28,31,30,31,30,31,31,30,31,30,31};
+        int maxDay = daysInMonth[month];
+        if (month == 2 && ((year % 4 == 0 && year % 100 != 0) || year % 400 == 0)) {
+          maxDay = 29;
+        }
+        if (day > maxDay) {
+          day = 1;
+          month++;
+          if (month > 12) {
+            month = 1;
+            year++;
+          }
+        }
+      }
+      hour = localHour;
+    }
+
     tm.tm_year = year - 1900;
     tm.tm_mon = month - 1;
     tm.tm_mday = day;
