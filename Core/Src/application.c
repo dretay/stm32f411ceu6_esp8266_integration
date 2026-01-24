@@ -7,12 +7,14 @@ static View* flip_clock_view;
 static View* status_view;
 static View* alarm_view;
 static View* calendar_view;
+static View* bank_view;
 static bool boot_complete = false;
 
-// View cycling state (0 = flip clock, 1 = calendar)
+// View cycling state (0 = flip clock, 1 = calendar, 2 = bank)
 static uint8_t active_view = 0;
-#define CLOCK_DISPLAY_TIME 30000    // 30 seconds on clock
-#define CALENDAR_DISPLAY_TIME 10000 // 10 seconds on calendar
+#define CLOCK_DISPLAY_TIME 30000           // 30 seconds on clock
+#define CALENDAR_DISPLAY_TIME 10000        // 10 seconds on calendar
+#define BANK_DISPLAY_TIME 10000            // 10 seconds on bank
 #define CALENDAR_REFRESH_INTERVAL 3600000  // 1 hour
 extern TIM_HandleTypeDef htim1;
 extern TIM_HandleTypeDef htim3;
@@ -228,29 +230,77 @@ static void retry_calendar_cb(void) {
   ESPComm.request_calendar(4, on_esp_calendar_received);
 }
 static void cycle_view_cb(void) {
-  active_view = (active_view + 1) % 2;  // Toggle between 0 and 1
+  active_view = (active_view + 1) % 3;  // Cycle through 0, 1, 2
   // Schedule next switch based on which view we just switched to
   if (active_view == 0) {
     // Switched to clock, show for 30 seconds
     Timer.in(CLOCK_DISPLAY_TIME, cycle_view_cb);
-  } else {
+  } else if (active_view == 1) {
     // Switched to calendar, show for 10 seconds
     Timer.in(CALENDAR_DISPLAY_TIME, cycle_view_cb);
+  } else {
+    // Switched to bank, show for 10 seconds
+    Timer.in(BANK_DISPLAY_TIME, cycle_view_cb);
   }
 }
 static void refresh_calendar_cb(void) {
   app_log_debug("Refreshing calendar...");
   ESPComm.request_calendar(4, on_esp_calendar_received);
-  Timer.in(CALENDAR_REFRESH_INTERVAL, refresh_calendar_cb);
+}
+static void refresh_balance_cb(void) {
+  app_log_debug("Refreshing balance...");
+  ESPComm.request_balance(on_esp_balance_received);
+}
+static void request_weather_and_time_cb(void) {
+  // Request time first, then weather callback will be triggered after time
+  ESPComm.request_time(on_esp_time_received);
+}
+
+// Re-send all configuration to ESP8266 (called after ESP reset)
+static void send_esp_config(void) {
+  app_log_debug("Re-sending ESP configuration...");
+  ESPComm.set_wifi(wifi_ssid, wifi_password);
+  HAL_Delay(100);
+  ESPComm.set_gcp_project(project_id);
+  HAL_Delay(100);
+  ESPComm.set_gcp_email(client_email);
+  HAL_Delay(100);
+  ESPComm.set_gcp_key(private_key);
+  HAL_Delay(100);
+  ESPComm.set_calendar_url(calendar_url);
+  HAL_Delay(100);
+  ESPComm.set_weather_api_key(openweather_api_key);
+  HAL_Delay(100);
+  ESPComm.set_weather_location(weather_city, weather_country);
+  HAL_Delay(100);
+  ESPComm.request_status(on_esp_status_received);
+}
+static void send_esp_config_cb(void) {
+  send_esp_config();
 }
 static void on_esp_error(const char* error) {
   app_log_error("ESP error: %s", error);
 
+  // ESP8266 WiFi connection failed - likely reset and lost config, re-send it
+  if (strstr(error, "WIFI_CONNECT_FAILED") != NULL) {
+    app_log_debug("ESP8266 WiFi failed, re-sending configuration...");
+    // Reset boot state to show status view again
+    boot_complete = false;
+    ESP_READY = false;
+    StatusView.set_wifi_state(BOOT_PHASE_IN_PROGRESS);
+    StatusView.set_time_state(BOOT_PHASE_PENDING);
+    StatusView.set_weather_state(BOOT_PHASE_PENDING);
+    StatusView.set_balance_state(BOOT_PHASE_PENDING);
+    StatusView.set_calendar_state(BOOT_PHASE_PENDING);
+    // Small delay before sending config
+    Timer.in(500, send_esp_config_cb);
+    return;
+  }
+
   // Determine which request failed and schedule a retry
   if (strstr(error, "NTP") != NULL) {
     Timer.in(ESP_RETRY_DELAY, retry_time_cb);
-  } else if (strstr(error, "WEATHER") != NULL ||
-             (strstr(error, "JSON_PARSE") != NULL && !boot_complete)) {
+  } else if (strstr(error, "WEATHER") != NULL || (strstr(error, "JSON_PARSE") != NULL && !boot_complete)) {
     // JSON_PARSE during boot is likely weather-related
     Timer.in(ESP_RETRY_DELAY, retry_weather_cb);
   } else if (strstr(error, "BALANCE") != NULL || strstr(error, "GSHEET") != NULL) {
@@ -287,6 +337,7 @@ static void on_esp_status_received(esp_status_t* status) {
 static void on_esp_balance_received(esp_balance_t* balance) {
   if (balance->valid) {
     app_log_debug("Balance: %ld", (long)balance->balance);
+    BankView.set_balance(balance->balance);
   } else {
     app_log_error("Unable to fetch balance!");
   }
@@ -311,11 +362,13 @@ static void on_esp_calendar_received(esp_calendar_t* cal) {
     boot_complete = true;
     app_log_debug("Boot complete, switching to flip clock view");
     // Start periodic weather/time refresh (10 minutes)
-    Timer.in(600000, request_weather_and_time_cb);
-    // Start view cycling (clock shows first for 30 seconds)
+    Timer.every(600000, request_weather_and_time_cb);
+    // Start periodic balance refresh (10 minutes)
+    Timer.every(600000, refresh_balance_cb);
+    // Start view cycling (clock shows first for 30 seconds, uses self-rescheduling for variable intervals)
     Timer.in(CLOCK_DISPLAY_TIME, cycle_view_cb);
     // Start calendar refresh (1 hour)
-    Timer.in(CALENDAR_REFRESH_INTERVAL, refresh_calendar_cb);
+    Timer.every(CALENDAR_REFRESH_INTERVAL, refresh_calendar_cb);
   }
 }
 
@@ -386,10 +439,6 @@ static void on_esp_time_received(esp_time_t* time) {
 
 // Weather handling
 static void on_esp_weather_received(esp_weather_t* weather);
-static void request_weather_and_time_cb(void) {
-  // Request time first, then weather callback will be triggered after time
-  ESPComm.request_time(on_esp_time_received);
-}
 static void on_esp_weather_received(esp_weather_t* weather) {
   if (weather->valid) {
     app_log_debug("Weather: %d°F, %s, humidity=%d%%, precip=%d%%", weather->temp_f, weather->condition,
@@ -405,10 +454,6 @@ static void on_esp_weather_received(esp_weather_t* weather) {
   } else {
     app_log_error("Unable to fetch weather!");
   }
-  // Request weather again in 10 minutes (also re-syncs time)
-  if (boot_complete) {
-    Timer.in(600000, request_weather_and_time_cb);
-  }
 }
 static void init() {
   app_log_debug("Application init");
@@ -423,6 +468,7 @@ static void init() {
   status_view = StatusView.init();
   alarm_view = AlarmView.init();
   calendar_view = CalendarView.init();
+  bank_view = BankView.init();
 
   Timer.init();
 
@@ -461,12 +507,14 @@ static void init() {
 // TODO: a "settings" screen to control volume and brightness, persist in
 // eeprom, maybe alarm time?
 static void run(void) {
-  // Show status view during boot, then cycle between flip clock and calendar
+  // Show status view during boot, then cycle between flip clock, calendar, and bank
   if (boot_complete) {
     if (active_view == 0) {
       flip_clock_view->render();
-    } else {
+    } else if (active_view == 1) {
       calendar_view->render();
+    } else {
+      bank_view->render();
     }
   } else {
     status_view->render();
