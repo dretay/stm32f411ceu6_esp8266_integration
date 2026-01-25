@@ -16,6 +16,9 @@ static uint8_t alarm_hour = 7;
 static uint8_t alarm_minute = 0;
 static bool alarm_enabled = false;
 
+// Editing state
+static alarm_field_t selected_field = ALARM_FIELD_HOUR;
+
 // Animation state
 static int anim_frame = 0;
 
@@ -152,13 +155,16 @@ static void draw_school_bus(int frame) {
 }
 
 // Draw on/off toggle switch (black and white)
-static void draw_toggle_switch(int x, int y, bool is_on) {
+static void draw_toggle_switch(int x, int y, bool is_on, bool is_selected) {
   int switch_width = 50;
   int switch_height = 24;
   int knob_radius = 9;
 
-  // Switch track outline
+  // Switch track outline - double box if selected
   gdispDrawBox(x, y, switch_width, switch_height, White);
+  if (is_selected) {
+    gdispDrawBox(x - 2, y - 2, switch_width + 4, switch_height + 4, White);
+  }
 
   // Knob position - filled circle on the active side
   int knob_x = is_on ? (x + switch_width - knob_radius - 3) : (x + knob_radius + 3);
@@ -175,12 +181,10 @@ static void draw_toggle_switch(int x, int y, bool is_on) {
   gdispCloseFont(font);
 }
 
-// Draw the time display
+// Draw the time display with selection highlight
 static void draw_alarm_time(void) {
   font_t font = gdispOpenFont("DejaVuSans24");
 
-  // Format time as HH:MM AM/PM
-  char time_str[12];
   uint8_t display_hour = alarm_hour;
   const char* ampm = "AM";
 
@@ -194,12 +198,42 @@ static void draw_alarm_time(void) {
     ampm = "PM";
   }
 
-  snprintf(time_str, sizeof(time_str), "%d:%02d%s", display_hour, alarm_minute, ampm);
-
   int text_x = 8;
   int text_y = CONTROL_AREA_Y + 15;
 
-  gdispDrawString(text_x, text_y, time_str, font, White);
+  // Draw hour
+  char hour_str[4];
+  snprintf(hour_str, sizeof(hour_str), "%d", display_hour);
+  int hour_width = gdispGetStringWidth(hour_str, font);
+
+  if (selected_field == ALARM_FIELD_HOUR) {
+    // Draw underline for selected hour
+    gdispDrawLine(text_x, text_y + 26, text_x + hour_width, text_y + 26, White);
+    gdispDrawLine(text_x, text_y + 27, text_x + hour_width, text_y + 27, White);
+  }
+  gdispDrawString(text_x, text_y, hour_str, font, White);
+  text_x += hour_width;
+
+  // Draw colon
+  gdispDrawString(text_x, text_y, ":", font, White);
+  text_x += gdispGetStringWidth(":", font);
+
+  // Draw minute
+  char min_str[4];
+  snprintf(min_str, sizeof(min_str), "%02d", alarm_minute);
+  int min_width = gdispGetStringWidth(min_str, font);
+
+  if (selected_field == ALARM_FIELD_MINUTE) {
+    // Draw underline for selected minute
+    gdispDrawLine(text_x, text_y + 26, text_x + min_width, text_y + 26, White);
+    gdispDrawLine(text_x, text_y + 27, text_x + min_width, text_y + 27, White);
+  }
+  gdispDrawString(text_x, text_y, min_str, font, White);
+  text_x += min_width;
+
+  // Draw AM/PM
+  gdispDrawString(text_x, text_y, ampm, font, White);
+
   gdispCloseFont(font);
 }
 
@@ -221,7 +255,7 @@ static void render(void) {
   draw_alarm_time();
 
   // Draw on/off toggle (right side, vertically centered in control area)
-  draw_toggle_switch(DISPLAY_WIDTH - 58, CONTROL_AREA_Y + 15, alarm_enabled);
+  draw_toggle_switch(DISPLAY_WIDTH - 58, CONTROL_AREA_Y + 15, alarm_enabled, selected_field == ALARM_FIELD_ENABLED);
 
   gdispGFlush(gdispGetDisplay(0));
 }
@@ -250,11 +284,43 @@ static uint8_t get_alarm_minute(void) {
   return alarm_minute;
 }
 
+static void set_selected_field(alarm_field_t field) {
+  selected_field = field;
+}
+
+static alarm_field_t get_selected_field(void) {
+  return selected_field;
+}
+
+static void next_field(void) {
+  selected_field = (selected_field + 1) % ALARM_FIELD_COUNT;
+}
+
+static void adjust_selected(int8_t delta) {
+  switch (selected_field) {
+    case ALARM_FIELD_HOUR:
+      // Wrap hour 0-23
+      alarm_hour = (alarm_hour + delta + 24) % 24;
+      break;
+    case ALARM_FIELD_MINUTE:
+      // Wrap minute 0-59
+      alarm_minute = (alarm_minute + delta + 60) % 60;
+      break;
+    case ALARM_FIELD_ENABLED:
+      // Toggle on any delta
+      alarm_enabled = !alarm_enabled;
+      break;
+    default:
+      break;
+  }
+}
+
 static View* init(void) {
   view.render = render;
   alarm_hour = 7;
   alarm_minute = 0;
   alarm_enabled = false;
+  selected_field = ALARM_FIELD_HOUR;
   anim_frame = 0;
   return &view;
 }
@@ -267,4 +333,8 @@ const struct alarmview AlarmView = {
     .is_enabled = is_enabled,
     .get_alarm_hour = get_alarm_hour,
     .get_alarm_minute = get_alarm_minute,
+    .set_selected_field = set_selected_field,
+    .get_selected_field = get_selected_field,
+    .next_field = next_field,
+    .adjust_selected = adjust_selected,
 };

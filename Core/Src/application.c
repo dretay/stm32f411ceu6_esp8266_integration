@@ -13,6 +13,8 @@ struct DigitalEncoderValue old_encoder_value;
 
 // View cycling state (0 = flip clock, 1 = calendar, 2 = bank)
 static uint8_t active_view = 0;
+// AlarmView editing state
+static bool alarm_view_active = false;
 #define CLOCK_DISPLAY_TIME 30000           // 30 seconds on clock
 #define CALENDAR_DISPLAY_TIME 10000        // 10 seconds on calendar
 #define BANK_DISPLAY_TIME 10000            // 10 seconds on bank
@@ -509,9 +511,11 @@ static void init() {
 // TODO: a "settings" screen to control volume and brightness, persist in
 // eeprom, maybe alarm time?
 static void run(void) {
-  // Show status view during boot, then cycle between flip clock, calendar, and bank
+  // Show status view during boot, alarm view if active, or cycle between flip clock, calendar, and bank
   if (boot_complete) {
-    if (active_view == 0) {
+    if (alarm_view_active) {
+      alarm_view->render();
+    } else if (active_view == 0) {
       flip_clock_view->render();
     } else if (active_view == 1) {
       calendar_view->render();
@@ -528,14 +532,41 @@ static void run(void) {
       app_log_error("encoder error");
     }
 
+    // Handle encoder rotation
     if (encoder_value.encoder_value > old_encoder_value.encoder_value) {
       app_log_debug("rotary encoder forward");
+      if (alarm_view_active) {
+        // Adjust selected field value up
+        AlarmView.adjust_selected(1);
+      } else {
+        // Switch to alarm view
+        alarm_view_active = true;
+      }
     } else if (encoder_value.encoder_value < old_encoder_value.encoder_value) {
       app_log_debug("rotary encoder backward");
+      if (alarm_view_active) {
+        // Adjust selected field value down
+        AlarmView.adjust_selected(-1);
+      } else {
+        // Switch to alarm view
+        alarm_view_active = true;
+      }
     }
 
-    if (encoder_value.button_pressed) {  // renamed from button_value
+    // Handle button press
+    if (encoder_value.button_pressed) {
       app_log_debug("rotary encoder button");
+      if (alarm_view_active) {
+        // Check if we're on the last field
+        if (AlarmView.get_selected_field() == ALARM_FIELD_ENABLED) {
+          // Exit alarm view and return to normal view cycle
+          alarm_view_active = false;
+          AlarmView.set_selected_field(ALARM_FIELD_HOUR);  // Reset for next time
+        } else {
+          // Cycle to next field in alarm view
+          AlarmView.next_field();
+        }
+      }
     }
 
     old_encoder_value = encoder_value;
