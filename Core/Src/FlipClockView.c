@@ -11,7 +11,7 @@ static View view;
 #define DISPLAY_HEIGHT 160
 
 // Large digit dimensions (for time)
-#define DIGIT_WIDTH 38
+#define DIGIT_WIDTH 34
 #define DIGIT_WIDTH_ONE 18  // Narrower width for "1" (only right segments)
 #define DIGIT_HEIGHT 92
 #define SEGMENT_THICK 10
@@ -397,9 +397,13 @@ static void draw_temp(void) {
 
   gdispDrawString(text_x + total_temp_width + 8, TEMP_Y + 1, condition_short, font, White);
 
-  // Icon and percentage at far right
-  int icon_x = DISPLAY_WIDTH - 38;
-  int precip_x = DISPLAY_WIDTH - 24;
+  // Calculate precipitation text width first to position icon
+  char precip_str[8];
+  snprintf(precip_str, sizeof(precip_str), "%d%%", weather_data.precip_chance);
+  font_t precip_font = gdispOpenFont("DejaVuSans10");
+  int precip_width = gdispGetStringWidth(precip_str, precip_font);
+  int precip_draw_x = DISPLAY_WIDTH - precip_width - 2;  // Right-align with 2px margin
+  int icon_x = precip_draw_x - 12;  // Icon to the left of percentage with 2px gap
 
   // Determine precipitation type for icon
   precip_type_t precip = get_precip_type(weather_data.condition);
@@ -445,11 +449,8 @@ static void draw_temp(void) {
       break;
   }
 
-  // Always draw precipitation percentage for consistent layout
-  char precip_str[8];
-  snprintf(precip_str, sizeof(precip_str), "%d%%", weather_data.precip_chance);
-  font_t precip_font = gdispOpenFont("DejaVuSans10");
-  gdispDrawString(precip_x, TEMP_Y + 3, precip_str, precip_font, White);
+  // Draw precipitation percentage
+  gdispDrawString(precip_draw_x, TEMP_Y + 3, precip_str, precip_font, White);
   gdispCloseFont(precip_font);
 
   gdispCloseFont(font);
