@@ -73,6 +73,9 @@ file(GLOB USB_MASSSTORAGE_SOURCES
 file(GLOB STM32_TIMER_SOURCES
     /Users/user/STM32CubeIDE/workspace_1.14.0/libraries/stm32_timer/release/src/*.c
 )
+file(GLOB STM32_ENCODER_SOURCES
+    /Users/user/STM32CubeIDE/workspace_1.14.0/libraries/stm32_digital_encoder_client/src/*.c
+)
 
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
@@ -83,6 +86,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${LOGGER_SOURCES}
     ${USB_MASSSTORAGE_SOURCES}
     ${STM32_TIMER_SOURCES}
+    ${STM32_ENCODER_SOURCES}
 )
 
 # Add include paths
@@ -99,6 +103,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     /Users/user/STM32CubeIDE/workspace_1.14.0/libraries/rtt_logger/inc
     /Users/user/STM32CubeIDE/workspace_1.14.0/libraries/stm32_usb_mass_storage/inc
     /Users/user/STM32CubeIDE/workspace_1.14.0/libraries/stm32_timer/release/include
+    /Users/user/STM32CubeIDE/workspace_1.14.0/libraries/stm32_digital_encoder_client/inc
 )
 
 # Add project symbols (macros)

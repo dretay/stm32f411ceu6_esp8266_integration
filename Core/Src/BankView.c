@@ -4,6 +4,8 @@
 static View view;
 static int pig_offset = 0;
 static bool pig_count_up = true;
+static int pig_bob = 0;
+static bool pig_bob_up = true;
 static int32_t current_balance = 0;
 
 static void render() {
@@ -22,6 +24,19 @@ static void render() {
       pig_count_up = true;
     }
   }
+
+  // Vertical bobbing for walking effect (faster oscillation)
+  if (pig_bob_up) {
+    pig_bob++;
+    if (pig_bob > 3) {
+      pig_bob_up = false;
+    }
+  } else {
+    pig_bob--;
+    if (pig_bob < -3) {
+      pig_bob_up = true;
+    }
+  }
   // ALEX's BANK ACCOUNT
   font_t DejaVuSans16 = gdispOpenFont("DejaVuSans16");
   char title_string[] = "Alex's Bank Account";
@@ -33,7 +48,7 @@ static void render() {
   // PIG
   gdispImage piggy_img;
   gdispImageOpenFile(&piggy_img, "piggy_96_96.bmp");
-  gdispImageDraw(&piggy_img, (((swidth / 2) - 35) - pig_offset), 30, 96, 96, 0, 0);
+  gdispImageDraw(&piggy_img, (((swidth / 2) - 35) - pig_offset), 30 + pig_bob, 96, 96, 0, 0);
   gdispImageClose(&piggy_img);
 
   //"ROAD"

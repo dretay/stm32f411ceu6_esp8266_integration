@@ -9,6 +9,7 @@ static View* alarm_view;
 static View* calendar_view;
 static View* bank_view;
 static bool boot_complete = false;
+struct DigitalEncoderValue old_encoder_value;
 
 // View cycling state (0 = flip clock, 1 = calendar, 2 = bank)
 static uint8_t active_view = 0;
@@ -471,6 +472,7 @@ static void init() {
   bank_view = BankView.init();
 
   Timer.init();
+  DigitalEncoder.init(0x10);
 
   // Show status view and start wifi connection phase
   StatusView.set_wifi_state(BOOT_PHASE_IN_PROGRESS);
@@ -519,6 +521,25 @@ static void run(void) {
   } else {
     status_view->render();
   }
+  if (DigitalEncoder.irq_raised()) {
+    struct DigitalEncoderValue encoder_value = DigitalEncoder.query();
+
+    if (encoder_value.status != ENCODER_OK) {
+      app_log_error("encoder error");
+    }
+
+    if (encoder_value.encoder_value > old_encoder_value.encoder_value) {
+      app_log_debug("rotary encoder forward");
+    } else if (encoder_value.encoder_value < old_encoder_value.encoder_value) {
+      app_log_debug("rotary encoder backward");
+    }
+
+    if (encoder_value.button_pressed) {  // renamed from button_value
+      app_log_debug("rotary encoder button");
+    }
+
+    old_encoder_value = encoder_value;
+  }
   ESPComm.process();
   Disk.process();
   // if (ESP_READY && (!ESP_BALANCE_RECEIVED || !ESP_CALENDAR_RECEIVED)) {
@@ -546,6 +567,11 @@ void _Error_Handler(char* file, int line) {
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim) {
   if (htim == &htim3) {
     Timer.tick();
+  }
+}
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+  if (GPIO_Pin == GPIO_PIN_5) {
+    DigitalEncoder.set_irq_raised(true);
   }
 }
 

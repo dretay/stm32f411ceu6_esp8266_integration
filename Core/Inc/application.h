@@ -10,6 +10,7 @@
 #include "BankView.h"
 #include "CalendarView.h"
 #include "ClockView.h"
+#include "DigitalEncoder.h"
 #include "FlipClockView.h"
 #include "StatusView.h"
 #include "gfx.h"

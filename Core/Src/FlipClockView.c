@@ -100,6 +100,14 @@ static void draw_large_digit(int x, int y, int digit) {
   draw_digit_sized(x, y, digit, DIGIT_WIDTH, DIGIT_HEIGHT, SEGMENT_THICK);
 }
 
+// Draw large "1" centered within DIGIT_WIDTH (instead of right-aligned)
+static void draw_large_one_centered(int x, int y) {
+  int center_x = x + (DIGIT_WIDTH - SEGMENT_THICK) / 2;
+  // Draw segments b (upper right) and c (lower right) centered
+  draw_v_segment(center_x, y + SEGMENT_THICK / 2, DIGIT_HEIGHT / 2 - SEGMENT_THICK / 2, SEGMENT_THICK);
+  draw_v_segment(center_x, y + DIGIT_HEIGHT / 2, DIGIT_HEIGHT / 2 - SEGMENT_THICK / 2, SEGMENT_THICK);
+}
+
 // Draw medium digit for day/date
 static void draw_med_digit(int x, int y, int digit) {
   draw_digit_sized(x, y, digit, MED_DIGIT_WIDTH, MED_DIGIT_HEIGHT, MED_SEGMENT_THICK);
@@ -134,39 +142,49 @@ static void draw_time(int hours, int minutes, int seconds) {
   int m_ones = minutes % 10;
 
   int colon_width = 8;
+  int colon_spacing = DIGIT_SPACING;
 
-  // Calculate total width and starting position
-  // In 12-hour format, h_tens is always 1 (for 10, 11, 12), so use narrower width
-  int colon_spacing = DIGIT_SPACING;  // Spacing on each side of colon
+  // Calculate total width using consistent DIGIT_WIDTH for all digits
+  // This ensures even spacing; we'll center "1" digits visually when drawing
   int total_width;
   int x;
   if (h_tens > 0) {
-    // Leading "1" uses narrower width since it only has right-side segments
-    total_width = DIGIT_WIDTH_ONE + DIGIT_SPACING + DIGIT_WIDTH + colon_spacing + colon_width + colon_spacing + DIGIT_WIDTH + DIGIT_SPACING + DIGIT_WIDTH;
-    x = (DISPLAY_WIDTH - total_width) / 2;
+    // Two hour digits (10, 11, 12)
+    total_width = DIGIT_WIDTH + DIGIT_SPACING + DIGIT_WIDTH + colon_spacing + colon_width + colon_spacing + DIGIT_WIDTH + DIGIT_SPACING + DIGIT_WIDTH;
   } else {
-    // 3-digit time (1-9): center properly with spacing around colon
+    // Single hour digit (1-9)
     total_width = DIGIT_WIDTH + colon_spacing + colon_width + colon_spacing + DIGIT_WIDTH + DIGIT_SPACING + DIGIT_WIDTH;
-    x = (DISPLAY_WIDTH - total_width) / 2;
   }
+  x = (DISPLAY_WIDTH - total_width) / 2;
 
-  // Draw hour digits
+  // Draw hour digits - center "1" within its space for visual balance
   if (h_tens > 0) {
-    // Draw leading "1" with narrower width so segments align properly
-    draw_digit_sized(x, TIME_Y, h_tens, DIGIT_WIDTH_ONE, DIGIT_HEIGHT, SEGMENT_THICK);
-    x += DIGIT_WIDTH_ONE + DIGIT_SPACING;
+    draw_large_one_centered(x, TIME_Y);  // h_tens is always 1
+    x += DIGIT_WIDTH + DIGIT_SPACING;
   }
-  draw_large_digit(x, TIME_Y, h_ones);
+  if (h_ones == 1) {
+    draw_large_one_centered(x, TIME_Y);
+  } else {
+    draw_large_digit(x, TIME_Y, h_ones);
+  }
   x += DIGIT_WIDTH + colon_spacing;
 
   // Draw colon (blinks each second)
   draw_colon(x, TIME_Y, DIGIT_HEIGHT, seconds);
   x += colon_width + colon_spacing;
 
-  // Draw minute digits
-  draw_large_digit(x, TIME_Y, m_tens);
+  // Draw minute digits - center "1" within its space for visual balance
+  if (m_tens == 1) {
+    draw_large_one_centered(x, TIME_Y);
+  } else {
+    draw_large_digit(x, TIME_Y, m_tens);
+  }
   x += DIGIT_WIDTH + DIGIT_SPACING;
-  draw_large_digit(x, TIME_Y, m_ones);
+  if (m_ones == 1) {
+    draw_large_one_centered(x, TIME_Y);
+  } else {
+    draw_large_digit(x, TIME_Y, m_ones);
+  }
 }
 
 // Draw slash between month and date
@@ -289,7 +307,7 @@ static void draw_sleet_icon(int x, int y, int size) {
 
 // Draw degree symbol manually (small circle)
 static void draw_degree_symbol(int x, int y) {
-  gdispDrawCircle(x + 2, y + 3, 2, White);
+  gdispDrawCircle(x + 3, y + 3, 2, White);
 }
 
 // Draw sun icon
