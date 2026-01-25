@@ -479,6 +479,8 @@ static void init() {
   // Show status view and start wifi connection phase
   StatusView.set_wifi_state(BOOT_PHASE_IN_PROGRESS);
 
+  // On startup wait a second to let the esp8266 settle before initializing
+  HAL_Delay(1000);
   ESPComm.init(&huart2);
   ESPComm.set_error_callback(on_esp_error);
   ESPComm.set_wifi(wifi_ssid, wifi_password);
@@ -559,7 +561,8 @@ static void run(void) {
       if (alarm_view_active) {
         // Check if we're on the last field
         if (AlarmView.get_selected_field() == ALARM_FIELD_ENABLED) {
-          // Exit alarm view and return to normal view cycle
+          // Save alarm settings and exit alarm view
+          AlarmView.save();
           alarm_view_active = false;
           AlarmView.set_selected_field(ALARM_FIELD_HOUR);  // Reset for next time
         } else {

@@ -25,5 +25,7 @@ struct alarmview {
   alarm_field_t (*get_selected_field)(void);
   void (*next_field)(void);
   void (*adjust_selected)(int8_t delta);
+  // Persistence
+  void (*save)(void);
 };
 extern const struct alarmview AlarmView;

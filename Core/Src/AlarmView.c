@@ -1,6 +1,12 @@
 #include "AlarmView.h"
 #include <stdio.h>
 
+extern RTC_HandleTypeDef hrtc;
+
+// Backup register format: [31:16] magic, [15:8] hour, [7:1] minute, [0] enabled
+#define ALARM_BACKUP_REG RTC_BKP_DR1
+#define ALARM_MAGIC 0xA1A2
+
 static View view;
 
 // Display dimensions
@@ -171,12 +177,16 @@ static void draw_toggle_switch(int x, int y, bool is_on, bool is_selected) {
   int knob_y = y + switch_height / 2;
   gdispFillCircle(knob_x, knob_y, knob_radius, White);
 
-  // ON/OFF label on opposite side of knob
-  font_t font = gdispOpenFont("DejaVuSans12");
+  // Draw both labels - text under knob is black, other is white
+  font_t font = gdispOpenFont("DejaVuSans10");
   if (is_on) {
-    gdispDrawString(x + 5, y + 5, "ON", font, White);
+    // Knob is on right covering ON - draw ON in black, OFF in white
+    gdispDrawString(x + 4, y + 7, "OFF", font, White);
+    gdispDrawString(x + switch_width - 18, y + 7, "ON", font, Black);
   } else {
-    gdispDrawString(x + switch_width - 24, y + 5, "OFF", font, White);
+    // Knob is on left covering OFF - draw OFF in black, ON in white
+    gdispDrawString(x + 4, y + 7, "OFF", font, Black);
+    gdispDrawString(x + switch_width - 18, y + 7, "ON", font, White);
   }
   gdispCloseFont(font);
 }
@@ -315,6 +325,25 @@ static void adjust_selected(int8_t delta) {
   }
 }
 
+static void save_to_backup(void) {
+  uint32_t data = (ALARM_MAGIC << 16) | (alarm_hour << 8) | (alarm_minute << 1) | (alarm_enabled ? 1 : 0);
+  HAL_RTCEx_BKUPWrite(&hrtc, ALARM_BACKUP_REG, data);
+}
+
+static void load_from_backup(void) {
+  uint32_t data = HAL_RTCEx_BKUPRead(&hrtc, ALARM_BACKUP_REG);
+  uint16_t magic = (data >> 16) & 0xFFFF;
+  if (magic == ALARM_MAGIC) {
+    alarm_hour = (data >> 8) & 0xFF;
+    alarm_minute = (data >> 1) & 0x7F;
+    alarm_enabled = (data & 1) ? true : false;
+    // Validate ranges
+    if (alarm_hour > 23) alarm_hour = 7;
+    if (alarm_minute > 59) alarm_minute = 0;
+  }
+  // If magic doesn't match, keep defaults (7:00, disabled)
+}
+
 static View* init(void) {
   view.render = render;
   alarm_hour = 7;
@@ -322,6 +351,7 @@ static View* init(void) {
   alarm_enabled = false;
   selected_field = ALARM_FIELD_HOUR;
   anim_frame = 0;
+  load_from_backup();  // Load saved alarm settings
   return &view;
 }
 
@@ -337,4 +367,5 @@ const struct alarmview AlarmView = {
     .get_selected_field = get_selected_field,
     .next_field = next_field,
     .adjust_selected = adjust_selected,
+    .save = save_to_backup,
 };
