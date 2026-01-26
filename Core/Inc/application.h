@@ -12,6 +12,7 @@
 #include "ClockView.h"
 #include "DigitalEncoder.h"
 #include "FlipClockView.h"
+#include "NeoPixel.h"
 #include "StatusView.h"
 #include "gfx.h"
 

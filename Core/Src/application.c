@@ -20,6 +20,7 @@ static bool alarm_view_active = false;
 #define BANK_DISPLAY_TIME 10000            // 10 seconds on bank
 #define CALENDAR_REFRESH_INTERVAL 3600000  // 1 hour
 extern TIM_HandleTypeDef htim1;
+extern TIM_HandleTypeDef htim2;
 extern TIM_HandleTypeDef htim3;
 extern SPI_HandleTypeDef hspi2;
 extern UART_HandleTypeDef huart2;
@@ -458,6 +459,18 @@ static void on_esp_weather_received(esp_weather_t* weather) {
     app_log_error("Unable to fetch weather!");
   }
 }
+void rainbow_cycle(void) {
+  static uint8_t offset = 0;
+  uint16_t num_leds = NeoPixel.getNumLeds();
+
+  for (uint16_t i = 0; i < num_leds; i++) {
+    uint8_t pos = (i * 256 / num_leds + offset) & 0xFF;
+    NeoPixel.setPixelColor32(i, NeoPixel.colorWheel(pos));
+  }
+
+  NeoPixel.show();
+  offset++;
+}
 static void init() {
   app_log_debug("Application init");
   // backlight PWM
@@ -500,6 +513,14 @@ static void init() {
 
   ESPComm.request_status(on_esp_status_received);
   HAL_Delay(100);
+
+  NeoPixel.init(&htim2, TIM_CHANNEL_1, 7);
+  NeoPixel.setBrightness(255);           // 20% brightness
+  NeoPixel.effectAlternating(255, 0, 0,  // Color 1: Red
+                             0, 0, 255,  // Color 2: Blue
+                             255,        // Full brightness
+                             150         // Fast alternation
+  );
 
   //  DFPlayerMini.init();
   //  DFPlayerMini.volumeAdjustSet(30);
@@ -576,6 +597,7 @@ static void run(void) {
   }
   ESPComm.process();
   Disk.process();
+  NeoPixel.updateEffect();
   // if (ESP_READY && (!ESP_BALANCE_RECEIVED || !ESP_CALENDAR_RECEIVED)) {
   //   if (!ESP_BALANCE_REQUESTED && !ESP_BALANCE_RECEIVED) {
   //     app_log_debug("Requesting balance");
@@ -607,6 +629,10 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
   if (GPIO_Pin == GPIO_PIN_5) {
     DigitalEncoder.set_irq_raised(true);
   }
+}
+// Add this callback
+void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef* htim) {
+  NeoPixel.dmaCompleteCallback(htim);
 }
 
 const struct application Application = {
