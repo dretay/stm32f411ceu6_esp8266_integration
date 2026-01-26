@@ -471,11 +471,35 @@ void rainbow_cycle(void) {
   NeoPixel.show();
   offset++;
 }
+// DFPlayer TX pin (directly connect to DFPlayer RX pin)
+#define DFPLAYER_TX_PORT GPIOA
+#define DFPLAYER_TX_PIN GPIO_PIN_9
+
+// DFPlayer BUSY pin (optional, directly connect to DFPlayer BUSY pin)
+#define DFPLAYER_BUSY_PORT GPIOA
+#define DFPLAYER_BUSY_PIN GPIO_PIN_10
 static void init() {
   app_log_debug("Application init");
   // backlight PWM
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
   HAL_TIM_Base_Start_IT(&htim3);
+
+  if (DFPlayerMini.initBitBang(DFPLAYER_TX_PORT, DFPLAYER_TX_PIN) != DFPLAYER_OK) {
+    app_log_error("Unable to initialize DFPLAYER!");
+  }
+  // Optional: configure BUSY pin for faster isPlaying() checks
+  DFPlayerMini.setBusyPin(DFPLAYER_BUSY_PORT, DFPLAYER_BUSY_PIN);
+
+  // Wait for DFPlayer to boot (needs ~1-2 seconds after power on)
+  // COMBINE THIS WITH ESP8266!!!!!!
+  HAL_Delay(2000);
+
+  // Configure player
+  // DFPlayerMini.setVolume(20);
+  // DFPlayerMini.setEQ(DFPLAYER_EQ_NORMAL);
+
+  // Play first track from MP3 folder
+  DFPlayerMini.playFromMP3Folder(1);
 
   gfxInit();
   gdispGSetOrientation(gdispGetDisplay(0), GDISP_ROTATE_0);
@@ -493,7 +517,7 @@ static void init() {
   StatusView.set_wifi_state(BOOT_PHASE_IN_PROGRESS);
 
   // On startup wait a second to let the esp8266 settle before initializing
-  HAL_Delay(1000);
+  // HAL_Delay(1000);
   ESPComm.init(&huart2);
   ESPComm.set_error_callback(on_esp_error);
   ESPComm.set_wifi(wifi_ssid, wifi_password);
@@ -515,7 +539,7 @@ static void init() {
   HAL_Delay(100);
 
   NeoPixel.init(&htim2, TIM_CHANNEL_1, 7);
-  NeoPixel.setBrightness(255);           // 20% brightness
+  NeoPixel.setBrightness(50);            // 20% brightness
   NeoPixel.effectAlternating(255, 0, 0,  // Color 1: Red
                              0, 0, 255,  // Color 2: Blue
                              255,        // Full brightness

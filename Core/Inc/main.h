@@ -61,6 +61,10 @@ void Error_Handler(void);
 /* Private defines -----------------------------------------------------------*/
 #define SPI1_CS_Pin GPIO_PIN_6
 #define SPI1_CS_GPIO_Port GPIOA
+#define DFPLAYER_TX_Pin GPIO_PIN_9
+#define DFPLAYER_TX_GPIO_Port GPIOA
+#define DFPLAYER_BUSY_Pin GPIO_PIN_10
+#define DFPLAYER_BUSY_GPIO_Port GPIOA
 
 /* USER CODE BEGIN Private defines */
 
